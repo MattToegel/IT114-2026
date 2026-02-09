@@ -56,7 +56,7 @@ public class BaseClass {
     public static void printHeader(String ucid, int problem) {
         LocalDateTime currentDT = LocalDateTime.now();
         System.out.println(
-                colorize(String.format("Running Problem %d for [%s] [%s]", problem, ucid, currentDT), Color.PURPLE));
+                colorize(String.format("Running Scenario %d for [%s] [%s]", problem, ucid, currentDT), Color.PURPLE));
         switch (problem) {
             case 1:
                 System.out.println("Objective: Print out only odd values in a single line separate by commas");
@@ -73,11 +73,11 @@ public class BaseClass {
                         "Objective: \n" +
                                 "Challenge 1: Remove non-alphanumeric characters except spaces\n" +
                                 "Challenge 2: Convert text to Title Case\n" +
-                                "Challenge 3: Trim leading/trailing spaces and remove duplicate spaces\n" +
+                                "Challenge 3: Remove leading/trailing spaces and remove duplicate spaces between words\n" +
                                 "Result 1-3: Assign final phrase to `placeholderForModifiedPhrase`\n" +
-                                "Challenge 4: Extract middle 3 characters (beginning starts at middle of phrase),\n" +
+                                "Challenge 4: Extract up to middle 3 characters (beginning starts at middle of phrase, exclude the first and last character for shorter phrases),\n" +
                                 "assign to 'placeholderForMiddleCharacters'\n" +
-                                "if not enough characters assign \"Not enough characters\"");
+                                "If not enough characters, assign \"Not enough characters\"");
                 break;
             default:
                 break;
@@ -87,35 +87,46 @@ public class BaseClass {
     public static void printFooter(String ucid, int problem) {
         LocalDateTime currentDT = LocalDateTime.now();
         System.out.println(
-                colorize(String.format("Completed Problem %d for [%s] [%s]", problem, ucid, currentDT), Color.PURPLE));
+                colorize(String.format("Completed Scenario %d for [%s] [%s]", problem, ucid, currentDT), Color.PURPLE));
     }
 
     // overloads
-    public static void printArrayInfo(int[] arr, int arrayNumber) {
-        final String message = String.format("Problem %s: Original Array: %s", arrayNumber, Arrays.toString(arr));
+    public static void printScenario1ArrayInfo(int[] arr, int arrayNumber) {
+        final String message = String.format("Array %s: Original Array: %s", arrayNumber, Arrays.toString(arr));
+        System.out.println(colorize(message, Color.BLUE));
+        System.out.print("Output Array: ");
+    }
+
+    public static void printScenario2ArrayInfo(double[] arr, int arrayNumber) {
+        final String message = String.format("Array %s: Original Array: %s", arrayNumber, Arrays.toString(arr));
         System.out.println(colorize(message, Color.BLUE));
     }
 
-    public static void printArrayInfo(double[] arr, int arrayNumber) {
-        final String message = String.format("Problem %s: Original Array: %s", arrayNumber, Arrays.toString(arr));
-        System.out.println(colorize(message, Color.BLUE));
+    public static void printScenario2Output(double total, Object modifiedTotal) {
+        System.out.println("Total Raw Value: " + total);
+        System.out.println("Total Modified Value: " + modifiedTotal);
+        System.out.println("");
+        System.out.println("______________________________________");
     }
 
-    public static void printArrayInfo(Object[] arr, int arrayNumber) {
-        final String message = String.format("Problem %s: Original Array:", arrayNumber);
+    public static void printScenario3ArrayInfo(Object[] arr, int arrayNumber) {
+        final String message = String.format("Array %s: Original Array:", arrayNumber);
         System.out.println(colorize(message, Color.BLUE));
         System.out.print(Color.BLUE.getCode());
-        printOutputWithType(arr);
+        printOutputWithType(arr, false);
 
         System.out.println(RESET);
     }
 
-    public static void printArrayInfoBasic(String[] arr, int arrayNumber) {
-        final String message = String.format("Problem %s: Original Array: %s", arrayNumber, Arrays.toString(arr));
+    public static void printScenario4ArrayInfo(String[] arr, int arrayNumber) {
+        final String message = String.format("Array %s: Original Array: %s", arrayNumber, Arrays.toString(arr));
         System.out.println(colorize(message, Color.BLUE));
     }
 
-    public static void printOutputWithType(Object[] arr) {
+    public static void printOutputWithType(Object[] arr, boolean isAnswer) {
+        if(isAnswer){
+            System.out.println("Output: ");
+        }
         List<Object> list = Arrays.asList(arr); // Handles null values safely
         Iterator<Object> iterator = list.iterator();
 
@@ -130,6 +141,10 @@ public class BaseClass {
             if (iterator.hasNext()) {
                 System.out.print(", "); // Not last element, add separator
             }
+        }
+        System.out.println("");
+        if(isAnswer){
+            System.out.println("______________________________________");
         }
     }
 

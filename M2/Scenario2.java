@@ -1,4 +1,6 @@
 package M2;
+// copilot: disable
+// @ts-nocheck
 
 public class Problem2 extends BaseClass {
     private static double[] array1 = { 0.1, 0.2, 0.3, 0.4, 0.5, 0.6 };
@@ -10,27 +12,26 @@ public class Problem2 extends BaseClass {
 
     private static void sumValues(double[] arr, int arrayNumber) {
         // Only make edits between the designated "Start" and "End" comments
-        printArrayInfo(arr, arrayNumber);
+        printScenario2ArrayInfo(arr, arrayNumber);
+        // This should be solved without Copilot auto-completion, to toggle it, click the Copilot chat bubble at the top of the editor.
+        //  Configure inline suggestions to "Disabled Inline Suggestions" (or similar) when writing code for this problem.
 
-        // Challenge 1: Sum all the values of the passed in array and assign to `total`
-        // Challenge 2: Have the sum be represented as a number with exactly 2 decimal places, assign to `modifiedTotal`
-        // Example: 0.1 would be shown as 0.10, 1 would be shown as 1.00, etc
+        // Challenge 1: Sum all the values of the passed in array and assign to the `total` variable
+        // Challenge 2: Have the sum (total) be represented as a number with exactly 2 decimal places (similar to currency), assign to `modifiedTotal` variable
+        // Example: 0.1 would be shown as 0.10, 1 would be shown as 1.00, 0.011 as 0.01, etc
         // Step 1: sketch out plan using comments (include ucid and date)
         // Step 2: Add/commit your outline of comments (required for full credit)
         // Step 3: Add code to solve the problem (add/commit as needed)
         double total = 0;
         // Start Solution Edits
         // Solve Challenge 1 here
-        
+       
       
         // Solve Challenge 2 here
         Object modifiedTotal = "?";
-
+        
         // End Solution Edits
-        System.out.println("Total Raw Value: " +total);
-        System.out.println("Total Modified Value: " + modifiedTotal);
-        System.out.println("");
-        System.out.println("______________________________________");
+        printScenario2Output(total, modifiedTotal);
     }
 
     public static void main(String[] args) {

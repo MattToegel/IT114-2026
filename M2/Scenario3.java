@@ -1,4 +1,6 @@
 package M2;
+// copilot: disable
+// @ts-nocheck
 
 public class Problem3 extends BaseClass {
     private static Integer[] array1 = {42, -17, 89, -256, 1024, -4096, 50000, -123456};
@@ -8,10 +10,12 @@ public class Problem3 extends BaseClass {
     private static Object[] array5 = {-1, 1, 2.0f, -2.0d, "3", "-3.0"};
     private static void bePositive(Object[] arr, int arrayNumber) {
         // Only make edits between the designated "Start" and "End" comments
-        printArrayInfo(arr, arrayNumber);
+        printScenario3ArrayInfo(arr, arrayNumber);
+        // This should be solved without Copilot auto-completion, to toggle it, click the Copilot chat bubble at the top of the editor.
+        //  Configure inline suggestions to "Disabled Inline Suggestions" (or similar) when writing code for this problem.
 
         // Challenge 1: Make each value positive
-        // Challenge 2: Convert the values back to their original data type and assign it to the proper slot of the `output` array
+        // Challenge 2: Convert the values back to their original data type and assign it to the proper slot in the `output` array
         // Step 1: sketch out plan using comments (include ucid and date)
         // Step 2: Add/commit your outline of comments (required for full credit)
         // Step 3: Add code to solve the problem (add/commit as needed)
@@ -20,10 +24,7 @@ public class Problem3 extends BaseClass {
         
 
         // End Solution Edits
-        System.out.println("Output: ");
-        printOutputWithType(output);
-        System.out.println("");
-        System.out.println("______________________________________");
+        printOutputWithType(output, true);
     }
 
     public static void main(String[] args) {
