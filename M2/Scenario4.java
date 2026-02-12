@@ -2,7 +2,7 @@ package M2;
 // copilot: disable
 // @ts-nocheck
 
-public class Problem4 extends BaseClass {
+public class Scenario4 extends BaseClass {
     private static String[] array1 = { "hello world!", "java programming", "special@#$%^&characters", "numbers 123 456",
             "mIxEd CaSe InPut!" };
     private static String[] array2 = { "hello world", "java programming", "this is a title case test",

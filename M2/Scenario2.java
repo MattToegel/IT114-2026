@@ -2,7 +2,7 @@ package M2;
 // copilot: disable
 // @ts-nocheck
 
-public class Problem2 extends BaseClass {
+public class Scenario2 extends BaseClass {
     private static double[] array1 = { 0.1, 0.2, 0.3, 0.4, 0.5, 0.6 };
     private static double[] array2 = { 1.0000001, 1.0000002, 1.0000003, 1.0000004, 1.0000005 }; 
     private static double[] array3 = { 1.0 / 3.0, 2.0 / 3.0, 4.0 / 3.0, 8.0 / 3.0,8.0 / 3.0 }; 
