@@ -5,7 +5,9 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ConcurrentHashMap;
 
-public class Server {
+public enum Server {
+    INSTANCE; // Singleton instance
+
     private int port = 3000;
     // thread-safe map; multiple ServerThreads may call Server methods concurrently
     private final ConcurrentHashMap<Long, ServerThread> connectedClients = new ConcurrentHashMap<>();
@@ -19,10 +21,12 @@ public class Server {
                 System.out.println("Waiting for next client");
                 Socket incomingClient = serverSocket.accept(); // blocks until a client connects
                 System.out.println("Client connected");
-                // third arg is a callback; ServerThread calls it once streams are open and it is ready
+                // third arg is a callback; ServerThread calls it once streams are open and it
+                // is ready
                 ServerThread serverThread = new ServerThread(incomingClient, this, this::onServerThreadInitialized);
                 serverThread.start();
-                // not added to connectedClients here; that happens inside the callback after setup
+                // not added to connectedClients here; that happens inside the callback after
+                // setup
             }
         } catch (IOException e) {
             System.err.println("Error accepting connection");
@@ -33,7 +37,8 @@ public class Server {
     }
 
     /**
-     * Callback from ServerThread once streams are open and it is ready to send/receive.
+     * Callback from ServerThread once streams are open and it is ready to
+     * send/receive.
      * Registers the client and announces their arrival.
      */
     private synchronized void onServerThreadInitialized(ServerThread serverThread) {
@@ -42,8 +47,10 @@ public class Server {
     }
 
     /**
-     * Internal disconnect: stops the thread, removes it from the map, and broadcasts a notice.
-     * Used by handleDisconnect() and can be reused for server-side actions like kicks or timeouts.
+     * Internal disconnect: stops the thread, removes it from the map, and
+     * broadcasts a notice.
+     * Used by handleDisconnect() and can be reused for server-side actions like
+     * kicks or timeouts.
      */
     private synchronized void disconnect(ServerThread serverThread) {
         serverThread.disconnect();
@@ -100,7 +107,7 @@ public class Server {
 
     public static void main(String[] args) {
         System.out.println("Server Starting");
-        Server server = new Server();
+        Server server = Server.INSTANCE;
         int port = 3000;
         try {
             port = Integer.parseInt(args[0]);

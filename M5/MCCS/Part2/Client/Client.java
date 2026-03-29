@@ -17,7 +17,9 @@ import M5.MCCS.Part2.Common.TextFX.Color;
 /**
  * Multi-client chat client using ObjectInputStream/ObjectOutputStream.
  */
-public class Client {
+public enum Client {
+    INSTANCE;
+
     private Socket server = null;
     private ObjectOutputStream out = null;
     private ObjectInputStream in = null;
@@ -59,7 +61,7 @@ public class Client {
         }
     }
 
-    public Client() {
+    private Client() {
         System.out.println("Client Created");
     }
 
@@ -244,7 +246,7 @@ public class Client {
     }
 
     public static void main(String[] args) {
-        Client client = new Client();
+        Client client = Client.INSTANCE;
         try {
             client.start();
         } catch (IOException e) {
