@@ -21,7 +21,6 @@ public class ServerThread extends Thread {
     private Socket client;
     private volatile boolean isRunning = false; // volatile so changes are visible across threads immediately
     private ObjectOutputStream out; // field so sendToClient() can reach it after run() opens it
-    private Server server;
     private long clientId;
     private Consumer<ServerThread> onInitializationComplete;
 
@@ -33,13 +32,11 @@ public class ServerThread extends Thread {
         return isRunning;
     }
 
-    protected ServerThread(Socket myClient, Server server, Consumer<ServerThread> onInitializationComplete) {
+    protected ServerThread(Socket myClient, Consumer<ServerThread> onInitializationComplete) {
         Objects.requireNonNull(myClient, "Client socket cannot be null");
-        Objects.requireNonNull(server, "Server cannot be null");
         Objects.requireNonNull(onInitializationComplete, "Callback cannot be null");
         this.clientId = this.threadId(); // set before any logging so the id appears correctly
         this.client = myClient;
-        this.server = server;
         this.onInitializationComplete = onInitializationComplete;
         info("ServerThread created");
     }
@@ -132,7 +129,7 @@ public class ServerThread extends Thread {
      */
     private void processPayload(String incoming) {
         if (!processCommand(incoming)) {
-            server.handleMessage(this, incoming);
+            Server.INSTANCE.handleMessage(this, incoming);
         }
     }
 
@@ -156,15 +153,15 @@ public class ServerThread extends Thread {
         System.out.println(TextFX.colorize("Checking command: " + command, Color.YELLOW));
         switch (command) {
             case "disconnect":
-                server.handleDisconnect(this);
+                Server.INSTANCE.handleDisconnect(this);
                 return true;
             case "users":
-                server.handleGetUserList(this);
+                Server.INSTANCE.handleGetUserList(this);
                 return true;
             case "reverse":
                 // join remaining segments back into the text to reverse
                 String relevantText = String.join(" ", Arrays.copyOfRange(commandData, 2, commandData.length));
-                server.handleReverseText(this, relevantText);
+                Server.INSTANCE.handleReverseText(this, relevantText);
                 return true;
             default:
                 return false;

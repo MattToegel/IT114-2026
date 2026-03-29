@@ -23,7 +23,7 @@ public enum Server {
                 System.out.println("Client connected");
                 // third arg is a callback; ServerThread calls it once streams are open and it
                 // is ready
-                ServerThread serverThread = new ServerThread(incomingClient, this, this::onServerThreadInitialized);
+                ServerThread serverThread = new ServerThread(incomingClient, this::onServerThreadInitialized);
                 serverThread.start();
                 // not added to connectedClients here; that happens inside the callback after
                 // setup
