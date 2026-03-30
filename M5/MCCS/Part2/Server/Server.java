@@ -91,6 +91,9 @@ public enum Server {
         serverThread.sendClientId(); // send the assigned client ID back to the client
         connectedClients.put(serverThread.getClientId(), serverThread);
         unicastClientStatus(serverThread); // send existing users to new client first
+        // Note: broadcastClientStatus includes the new client itself (they receive their own SERVER_JOIN
+        // and a SERVER_SYNC about themselves from unicast). This is intentional — filtering it out would
+        // add complexity that isn't the focus of this lesson; the client handles it safely via putIfAbsent.
         broadcastClientStatus(serverThread, true, false); // then announce new client to everyone
     }
 
