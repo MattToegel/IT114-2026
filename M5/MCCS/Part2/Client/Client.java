@@ -7,12 +7,16 @@ import java.net.Socket;
 import java.net.UnknownHostException;
 import java.util.Scanner;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import M5.MCCS.Part2.Common.Constants;
+import M5.MCCS.Part2.Common.ConnectionPayload;
+import M5.MCCS.Part2.Common.Payload;
+import M5.MCCS.Part2.Common.PayloadType;
 import M5.MCCS.Part2.Common.TextFX;
 import M5.MCCS.Part2.Common.TextFX.Color;
+import M5.MCCS.Part2.Common.User;
 
 /**
  * Multi-client chat client using ObjectInputStream/ObjectOutputStream.
@@ -27,6 +31,11 @@ public enum Client {
             .compile("/connect\\s+(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}:\\d{3,5})");
     final Pattern localhostPattern = Pattern.compile("/connect\\s+(localhost:\\d{3,5})");
     private volatile boolean isRunning = true;
+    // local cache of users known connected users; updated by SYNC_CLIENT payloads
+    // from server
+    private ConcurrentHashMap<Long, User> knownUsers = new ConcurrentHashMap<>();
+    private User myUser = new User(); // this client's User object; set on successful connect when server sends client
+    // id
 
     /**
      * Recognized client-side commands.
@@ -36,7 +45,8 @@ public enum Client {
         DISCONNECT("/disconnect"),
         QUIT("/quit"),
         USERS("/users"),
-        REVERSE("/reverse");
+        REVERSE("/reverse"),
+        SET_NAME("/name");
 
         private final String trigger;
 
@@ -111,37 +121,126 @@ public enum Client {
      */
     private boolean processClientCommand(String text) throws IOException {
         Command command = Command.fromText(text);
+        System.out.println("Processing command: " + command);
         if (command == null) {
             return false;
         }
         switch (command) {
             case CONNECT:
                 if (isConnection(text)) {
+                    String myClientName = myUser.getClientName();
+                    if (myClientName == null || myClientName.isBlank()) {
+                        System.out.println(TextFX.colorize("Set your name before connecting using `/name YourName`",
+                                Color.YELLOW));
+                        return true;
+                    }
                     // strip "/connect ", split host:port
                     String[] parts = text.trim().replaceAll(" +", " ").split(" ")[1].split(":");
                     connect(parts[0].trim(), Integer.parseInt(parts[1].trim()));
+                    sendConnectionData(myClientName); // send the desired name after connection request
                 } else {
                     System.out.println("Invalid format. Use: /connect localhost:3000 or /connect 192.168.1.x:3000");
                 }
                 return true;
-            case QUIT:
+            case QUIT: // client-side termination
                 close();
                 return true;
-            case DISCONNECT:
-                sendToServer(String.join(",", Constants.COMMAND_TRIGGER, "disconnect"));
+            case DISCONNECT: // request to gracefully disconnect from the server
+                sendDisconnect();
                 return true;
-            case USERS:
-                sendToServer(String.join(",", Constants.COMMAND_TRIGGER, "users"));
+            case USERS: // client-side command
+                System.out.println(TextFX.colorize("Known clients:", Color.CYAN));
+                knownUsers.forEach((key, value) -> {
+                    System.out.println(TextFX.colorize(String.format("%s%s", value.getDisplayName(),
+                            key == myUser.getClientId() ? " (you)" : ""), Color.CYAN));
+                });
                 return true;
             case REVERSE:
                 // strip "/reverse" prefix and send remainder as the text to reverse
                 String reverseText = text.replace("/reverse", "").trim();
-                sendToServer(String.join(",", Constants.COMMAND_TRIGGER, "reverse", reverseText));
+                sendReverse(reverseText);
+                return true;
+            case SET_NAME:
+                String name = text.replace("/name", "").trim();
+                if (name.isBlank()) {
+                    System.out.println(TextFX.colorize("Name cannot be blank", Color.RED));
+                } else {
+                    myUser.setClientName(name);// temporarily hold client's desired name
+                    // sendConnectionData() will trigger the server-side initialization flow
+                    System.out.println(
+                            TextFX.colorize("Name set to " + name + ".", Color.GREEN));
+                }
                 return true;
             default:
                 return false;
         }
     }
+
+    // Start region for send*() methods ===================================
+
+    /**
+     * Sends a client connect command to the server with this client's name. <br>
+     * Wraps the name in a ConnectionPayload object with PayloadType.CLIENT_CONNECT.
+     * 
+     * @param clientName
+     * @throws IOException
+     */
+    private void sendConnectionData(String clientName) throws IOException {
+        ConnectionPayload payload = new ConnectionPayload();
+        payload.setPayloadType(PayloadType.CLIENT_CONNECT);
+        payload.setClientName(clientName);
+        sendToServer(payload);
+    }
+
+    /**
+     * Sends a disconnect command to the server. <br>
+     * Wraps the command in a Payload object with PayloadType.DISCONNECT.
+     * 
+     * @throws IOException
+     */
+    private void sendDisconnect() throws IOException {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.DISCONNECT);
+        sendToServer(payload);
+    }
+
+    /**
+     * Sends a reverse command to the server with the text to reverse. <br>
+     * Wraps the text in a Payload object with PayloadType.REVERSE.
+     * 
+     * @param text
+     * @throws IOException
+     */
+    private void sendReverse(String text) throws IOException {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.REVERSE);
+        payload.setMessage(text);
+        sendToServer(payload);
+    }
+
+    /**
+     * Sends a chat message to the server to be broadcast to other clients. <br>
+     * Wraps incoming data in Payload object with PayloadType.MESSAGE.
+     * 
+     * @param text
+     * @throws IOException
+     */
+    private void sendMessage(String text) throws IOException {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.MESSAGE);
+        payload.setMessage(text);
+        sendToServer(payload);
+    }
+
+    private void sendToServer(Payload outgoingPayload) throws IOException {
+        if (isConnected()) {
+            out.writeObject(outgoingPayload);
+            out.flush();
+        } else {
+            System.out.println("Not connected to server (hint: type `/connect host:port`)");
+        }
+    }
+    // End region for send*() methods ===================================
 
     public void start() throws IOException {
         System.out.println("Client starting");
@@ -158,18 +257,22 @@ public enum Client {
     private void listenToServer() {
         try {
             while (isRunning && isConnected()) {
-                String fromServer = (String) in.readObject(); // blocking
-                if (fromServer != null) {
-                    System.out.println(TextFX.colorize(fromServer, Color.BLUE));
-                } else {
-                    System.out.println("Server disconnected");
-                    break;
+                try {
+                    Payload fromServer = (Payload) in.readObject(); // blocking
+                    if (fromServer != null) {
+                        processPayload(fromServer);
+                    } else {
+                        System.out.println("Server disconnected");
+                        break;
+                    }
+                } catch (ClassCastException | ClassNotFoundException cce) {
+                    // recoverable: single bad payload, keep the connection alive
+                    System.err.println("Error reading object as specified type: " + cce.getMessage());
+                    cce.printStackTrace();
                 }
             }
-        } catch (ClassCastException | ClassNotFoundException cce) {
-            System.err.println("Error reading object as specified type: " + cce.getMessage());
-            cce.printStackTrace();
         } catch (IOException e) {
+            // non-recoverable: stream broken, exit loop
             if (isRunning) {
                 System.out.println("Connection dropped");
                 e.printStackTrace();
@@ -181,6 +284,124 @@ public enum Client {
     }
 
     /**
+     * Routes incoming Payloads from the server to the appropriate handler based on
+     * the PayloadType.
+     * 
+     * @param payload
+     */
+    private void processPayload(Payload payload) {
+        if (payload == null || payload.getPayloadType() == null) {
+            System.out.println("Received invalid payload: " + payload);
+            return;
+        }
+        switch (payload.getPayloadType()) {
+            case CLIENT_ID:
+                // server is assigning this client an id; create myUser object
+                processClientId(payload);
+                break;
+            case SERVER_JOIN:
+            case SERVER_SYNC:
+            case SERVER_LEAVE:
+                processClientStatus(payload);
+                break;
+            case MESSAGE:
+                processMessage(payload);
+                break;
+            case REVERSE:
+                processReverse(payload);
+                break;
+            case DISCONNECT: // server acknowledged this client's disconnect command; close connection
+                System.out.println("Server acknowledged disconnect. Closing connection.");
+                closeServerConnection();
+                break;
+            default:
+                System.out.println("Received unhandled payload type: " + payload.getPayloadType());
+        }
+    }
+
+    // Start region for process*() methods ===================================
+
+    private void processReverse(Payload payload) {
+        // reversed text response from server; print it with a different color
+        System.out.println(TextFX.colorize(payload.getMessage(), Color.PURPLE));
+    }
+
+    /**
+     * Processes a MESSAGE payload from the server
+     * 
+     * @param payload
+     */
+    private void processMessage(Payload payload) {
+        // regular chat message from another client; just print it
+        System.out.println(TextFX.colorize(payload.getMessage(), Color.BLUE));
+    }
+
+    /**
+     * Processes SERVER_JOIN, SERVER_LEAVE, and SERVER_SYNC payloads, which all
+     * share the same format.
+     * Updates the knownUsers cache and prints join/leave messages as appropriate.
+     * 
+     * @param payload
+     */
+    private void processClientStatus(Payload payload) {
+        if (!(payload instanceof ConnectionPayload)) {
+            System.out.println(String.format("Expected ConnectionPayload for %s, got: %s", payload.getPayloadType(),
+                    payload.getClass()));
+            return;
+        }
+        // SERVER_JOIN, SERVER_LEAVE, and SERVER_SYNC all use the same payload type and
+        // format
+        PayloadType type = payload.getPayloadType();
+        long clientId = payload.getClientId();
+        String clientName = ((ConnectionPayload) payload).getClientName();
+        // temp user reference to avoid repeated code; will be added/removed from
+        // knownUsers cache as needed
+        User incomingUserData = new User(clientId, clientName);
+        switch (type) {
+            case SERVER_JOIN: // new client joined; print join message then fall through to add to knownUsers
+                System.out.println(TextFX.colorize(incomingUserData.getDisplayName() + " joined", Color.GREEN));
+                // intentional fall-through: SERVER_JOIN and SERVER_SYNC both need putIfAbsent
+            case SERVER_SYNC: // silent sync of existing clients on initial connect; just add to known users
+                knownUsers.putIfAbsent(clientId, incomingUserData);
+                break;
+            case SERVER_LEAVE: // client left; remove from known users and print message
+                User removedUser = knownUsers.remove(incomingUserData.getClientId());
+                if (removedUser != null) {
+                    // only inform if we actually knew about the user
+                    System.out.println(TextFX.colorize(removedUser.getDisplayName() + " left", Color.RED));
+                }
+                break;
+
+            default:
+                System.out.println(TextFX.colorize("Unknown status type: " + type, Color.YELLOW));
+                break;
+        }
+    }
+
+    /**
+     * Processes a CLIENT_ID payload from the server, which assigns this client its
+     * unique id and name.
+     * 
+     * @param payload
+     */
+    private void processClientId(Payload payload) {
+        if (!(payload instanceof ConnectionPayload)) {
+            System.out.println("Expected ConnectionPayload for CLIENT_ID, got: " + payload.getClass());
+            return;
+        }
+        // extract data
+        long assignedId = payload.getClientId();
+        String clientName = ((ConnectionPayload) payload).getClientName();
+        // create my users
+        myUser.setClientId(assignedId);
+        myUser.setClientName(clientName);
+        // add to known users cache
+        knownUsers.put(assignedId, myUser);
+        System.out.println(TextFX.colorize("Connected", Color.GREEN));
+    }
+    // End region for process*() methods ===================================
+
+    /**
      * Runs in a CompletableFuture thread. Blocks on scanner.nextLine() waiting for
      * keyboard input.
      */
@@ -190,7 +411,7 @@ public enum Client {
             while (isRunning) {
                 String userInput = si.nextLine();
                 if (!processClientCommand(userInput)) {
-                    sendToServer(userInput);
+                    sendMessage(userInput);
                 }
             }
         } catch (Exception e) {
@@ -202,15 +423,6 @@ public enum Client {
         System.out.println("listenToInput thread stopped");
     }
 
-    private void sendToServer(String message) throws IOException {
-        if (isConnected()) {
-            out.writeObject(message);
-            out.flush();
-        } else {
-            System.out.println("Not connected to server (hint: type `/connect host:port`)");
-        }
-    }
-
     private void close() {
         isRunning = false;
         closeServerConnection();
@@ -218,6 +430,8 @@ public enum Client {
     }
 
     private void closeServerConnection() {
+        knownUsers.clear();
+        myUser.reset();
         try {
             if (out != null) {
                 System.out.println("Closing output stream");

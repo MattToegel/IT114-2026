@@ -1,181 +1,162 @@
 package M5.MCCS.Part2.Server;
 
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
 import java.net.Socket;
-import java.util.Arrays;
 import java.util.Objects;
 import java.util.function.Consumer;
 
+import M5.MCCS.Part2.Common.ConnectionPayload;
 import M5.MCCS.Part2.Common.Constants;
-import M5.MCCS.Part2.Common.TextFX;
-import M5.MCCS.Part2.Common.TextFX.Color;
+import M5.MCCS.Part2.Common.Payload;
+import M5.MCCS.Part2.Common.PayloadType;
 
 /**
  * Server-side handler for one connected client.
  * Each client gets its own thread so multiple clients can be served
  * concurrently.
  */
-public class ServerThread extends Thread {
-    private Socket client;
-    private volatile boolean isRunning = false; // volatile so changes are visible across threads immediately
-    private ObjectOutputStream out; // field so sendToClient() can reach it after run() opens it
-    private long clientId;
+public class ServerThread extends BaseServerThread {
+
     private Consumer<ServerThread> onInitializationComplete;
-
-    private void info(String message) {
-        System.out.println(String.format("Thread[%s]: %s", this.getClientId(), message));
-    }
-
-    public boolean isRunning() {
-        return isRunning;
-    }
 
     protected ServerThread(Socket myClient, Consumer<ServerThread> onInitializationComplete) {
         Objects.requireNonNull(myClient, "Client socket cannot be null");
         Objects.requireNonNull(onInitializationComplete, "Callback cannot be null");
-        this.clientId = this.threadId(); // set before any logging so the id appears correctly
+
         this.client = myClient;
         this.onInitializationComplete = onInitializationComplete;
         info("ServerThread created");
     }
 
-    public long getClientId() {
-        return this.clientId;
-    }
-
-    /**
-     * Signals this thread to stop. Sets isRunning to false and interrupts the
-     * blocking readObject() call
-     * so the run() loop exits and the finally block handles cleanup.
-     * Call from outside this thread only (e.g. from Server).
-     */
-    protected void disconnect() {
-        if (!isRunning) {
-            return;
-        }
-        info("Thread being disconnected by server");
-        isRunning = false;
-        this.interrupt(); // unblocks readObject() if the thread is waiting on it
-    }
-
-    /**
-     * Sends a message to this client.
-     *
-     * @return true on success, false if the send failed (client likely
-     *         disconnected)
-     */
-    protected boolean sendToClient(String message) {
-        if (!isRunning) {
-            return false;
-        }
-        try {
-            out.writeObject(message);
-            out.flush();
-            return true;
-        } catch (IOException e) {
-            info("Error sending message to client (most likely disconnected)");
-            return false;
-        }
+    @Override
+    protected void info(String message) {
+        System.out.println(String.format("Thread[%s]: %s", this.getClientId(), message));
     }
 
     @Override
-    public void run() {
-        info("Thread starting");
-        // ObjectOutputStream must be opened before ObjectInputStream on both sides.
-        // Reversing the order causes a deadlock: both sides block waiting for the
-        // other's stream header.
-        try (ObjectOutputStream out = new ObjectOutputStream(client.getOutputStream());
-                ObjectInputStream in = new ObjectInputStream(client.getInputStream())) {
-            this.out = out;
-            isRunning = true;
-            onInitializationComplete.accept(this); // notify Server this thread is ready
-            while (isRunning) {
-                try {
-                    String fromClient = (String) in.readObject(); // blocks until client sends something
-                    if (fromClient == null) {
-                        throw new IOException("Connection interrupted");
-                    } else {
-                        info(TextFX.colorize("Received from client: " + fromClient, Color.CYAN));
-                        processPayload(fromClient);
-                    }
-                } catch (ClassCastException | ClassNotFoundException cce) {
-                    System.err.println("Error reading object as specified type: " + cce.getMessage());
-                    cce.printStackTrace();
-                } catch (IOException e) {
-                    if (Thread.currentThread().isInterrupted()) {
-                        info("Thread interrupted during read, disconnect() was called");
-                        break;
-                    }
-                    info("IO exception while reading from client");
-                    e.printStackTrace();
-                    break;
-                }
-            }
-        } catch (Exception e) {
-            info("Unexpected exception outside read loop (stream setup may have failed)");
-            e.printStackTrace();
-            info("Client disconnected unexpectedly");
-        } finally {
-            isRunning = false;
-            info("Exited thread loop. Cleaning up connection");
-            cleanup();
+    protected void onInitialized() {
+        if (onInitializationComplete == null) {
+            info("Initialization complete but callback is null. This should not happen.");
+            return;
         }
+        onInitializationComplete.accept(this);
     }
 
     /**
      * Routes incoming text to a command handler or broadcasts it as a chat message.
      */
-    private void processPayload(String incoming) {
-        if (!processCommand(incoming)) {
-            Server.INSTANCE.handleMessage(this, incoming);
+    @Override
+    protected void processPayload(Payload incoming) {
+
+        switch (incoming.getPayloadType()) {
+            case CLIENT_CONNECT:
+                processClientConnect(incoming);
+                break;
+            case DISCONNECT:
+                processDisconnect(incoming);
+                break;
+            case MESSAGE:
+                processMessage(incoming);
+                break;
+            case REVERSE:
+                processReverse(incoming);
+                break;
+            default:
+                info("Received unsupported payload type: " + incoming.getPayloadType());
         }
+    }
+
+    // Region used to hand off data to Server methods for processing
+    // Start region for process*() methods ===================================
+    private void processDisconnect(Payload incoming) {
+        info("Processing disconnect payload");
+        Server.INSTANCE.handleDisconnect(this);
+    }
+
+    private void processReverse(Payload incoming) {
+        info("Processing reverse payload");
+        Server.INSTANCE.handleReverseText(this, incoming.getMessage());
+    }
+
+    private void processMessage(Payload incoming) {
+        info("Processing message payload");
+        Server.INSTANCE.handleMessage(this, incoming.getMessage());
+    }
+
+    private void processClientConnect(Payload incoming) {
+        info("Processing client connect payload");
+        if (!(incoming instanceof ConnectionPayload)) {
+            info("Received invalid payload for client connect: " + incoming);
+            return;
+        }
+        if (getClientId() != Constants.DEFAULT_CLIENT_ID) {
+            info("Received client connect payload but client is already initialized. Ignoring.");
+            return;
+        }
+        // TODO: could add validation for client name here (not blank, length limit,
+        // profanity filter, etc)
+        setClientName(((ConnectionPayload) incoming).getClientName());
+    }
+    // End region for process*() methods ===================================
+
+    // Start region for send*() methods ===================================
+
+    /**
+     * Sends a disconnect trigger to the client before disconnecting. This allows
+     * the client to differentiate between a normal disconnect and a kick/timeout.
+     * The client can use this information to decide whether to attempt an automatic
+     * reconnect or not.
+     */
+    protected void sendDisconnectTrigger() {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.DISCONNECT);
+        sendToClient(payload);
+        disconnect();
     }
 
     /**
-     * Checks if the message is a command and handles it.
-     * Commands start with COMMAND_TRIGGER and are comma-separated:
-     * trigger,name,data
-     * Example: [cmd],reverse,hello world
-     *
-     * @return true if a command was handled, false if plain text
+     * Sends the assigned client ID back to the client after they connect.
+     * 
+     * @return
      */
-    private boolean processCommand(String message) {
-        if (!message.startsWith(Constants.COMMAND_TRIGGER)) {
-            return false;
-        }
-        String[] commandData = message.split(",");
-        if (commandData.length < 2) {
-            return false;
-        }
-        final String command = commandData[1].trim();
-        System.out.println(TextFX.colorize("Checking command: " + command, Color.YELLOW));
-        switch (command) {
-            case "disconnect":
-                Server.INSTANCE.handleDisconnect(this);
-                return true;
-            case "users":
-                Server.INSTANCE.handleGetUserList(this);
-                return true;
-            case "reverse":
-                // join remaining segments back into the text to reverse
-                String relevantText = String.join(" ", Arrays.copyOfRange(commandData, 2, commandData.length));
-                Server.INSTANCE.handleReverseText(this, relevantText);
-                return true;
-            default:
-                return false;
-        }
+    protected boolean sendClientId() {
+        ConnectionPayload payload = new ConnectionPayload();
+        payload.setPayloadType(PayloadType.CLIENT_ID);
+        payload.setClientId(getClientId());
+        payload.setClientName(getClientName());
+        return sendToClient(payload);
     }
 
-    private void cleanup() {
-        info("ServerThread cleanup() start");
-        try {
-            client.close();
-            info("Closed server-side socket");
-        } catch (IOException e) {
-            info("Client already closed");
+    /**
+     * Sends a client status update to this client. Used to notify of other clients
+     * joining or leaving, as well as to sync existing clients when a new client
+     * joins.
+     * 
+     * @param clientId   the clientId of the client whose status is being updated
+     * @param clientName the clientName of the client whose status is being updated
+     * @param isJoin     true if this is a join event, false if it's a leave event
+     * @param isSync     true if this is part of the initial sync when a new client
+     *                   joins, false if it's a real-time update after the initial
+     *                   sync
+     * @return true if the message was sent successfully, false if the send failed
+     *         (client likely disconnected)
+     */
+    protected boolean sendClientStatus(long clientId, String clientName, boolean isJoin, boolean isSync) {
+        ConnectionPayload payload = new ConnectionPayload();
+        if (isSync) {
+            payload.setPayloadType(PayloadType.SERVER_SYNC);
+        } else {
+            payload.setPayloadType(isJoin ? PayloadType.SERVER_JOIN : PayloadType.SERVER_LEAVE);
         }
-        info("ServerThread cleanup() end");
+        payload.setClientId(clientId);
+        payload.setClientName(clientName);
+        return sendToClient(payload);
     }
+
+    protected boolean sendMessage(String message) {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.MESSAGE);
+        payload.setMessage(message);
+        return sendToClient(payload);
+    }
+    // End region for send*() methods ===================================
 }
