@@ -16,14 +16,13 @@ import M5.MCCS.Part2.Common.PayloadType;
  */
 public class ServerThread extends BaseServerThread {
 
-    private Consumer<ServerThread> onInitializationComplete;
+    private final Consumer<ServerThread> onInitializationComplete;
 
     protected ServerThread(Socket myClient, Consumer<ServerThread> onInitializationComplete) {
-        Objects.requireNonNull(myClient, "Client socket cannot be null");
-        Objects.requireNonNull(onInitializationComplete, "Callback cannot be null");
-
-        this.client = myClient;
-        this.onInitializationComplete = onInitializationComplete;
+        // validate and pass to base class constructor
+        super(Objects.requireNonNull(myClient, "Client socket cannot be null"));
+        // validate and assign callback
+        this.onInitializationComplete = Objects.requireNonNull(onInitializationComplete, "Callback cannot be null");
         info("ServerThread created");
     }
 

@@ -18,9 +18,16 @@ import M5.MCCS.Part2.Common.Constants;
 public abstract class BaseServerThread extends Thread {
 
     protected volatile boolean isRunning = false; // control variable to stop this thread
-    protected ObjectOutputStream out; // exposed here for send()
-    protected Socket client; // communication directly to "my" client
+    private ObjectOutputStream out; // exposed here for send()
+    private Socket client; // communication directly to "my" client
     private User user = new User();
+
+    public BaseServerThread() {
+    }
+
+    public BaseServerThread(Socket client) {
+        this.client = client;
+    }
 
     /**
      * Returns the status of this ServerThread
