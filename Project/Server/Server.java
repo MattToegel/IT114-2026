@@ -195,7 +195,7 @@ public enum Server {
      * Any client whose send fails is removed from the map.
      */
     private synchronized void broadcast(ServerThread sender, String message) {
-        String senderLabel = sender == null ? "Server" : String.format("User[%s]", sender.getDisplayName());
+        String senderLabel = sender == null ? "Server" : String.format("%s", sender.getDisplayName());
         final String formatted = String.format("%s: %s", senderLabel, message);
         sendOrDisconnect(serverThread -> serverThread.sendMessage(formatted));
     }
