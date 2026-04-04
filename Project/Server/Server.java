@@ -8,11 +8,21 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
+import Project.Common.LoggerUtil;
 import Project.Common.TextFX;
 import Project.Common.TextFX.Color;
 
 public enum Server {
     INSTANCE; // Singleton instance
+
+    // Static initializer block to configure server-side logging
+    static {
+        LoggerUtil.LoggerConfig config = new LoggerUtil.LoggerConfig();
+        config.setFileSizeLimit(2048 * 1024); // 2MB
+        config.setFileCount(1);
+        config.setLogLocation("server.log");
+        LoggerUtil.INSTANCE.setConfig(config);
+    }
 
     private int port = 3000;
     private ServerSocket serverSocket = null; // kept as field so shutdown() can close it
@@ -25,7 +35,7 @@ public enum Server {
     private long nextClientId = 1; // simple client ID generator
 
     private void info(String message) {
-        System.out.println(TextFX.colorize(String.format("Server: %s", message), Color.YELLOW));
+        LoggerUtil.INSTANCE.info(TextFX.colorize("Server: " + message, Color.YELLOW));
     }
 
     /**
@@ -113,7 +123,8 @@ public enum Server {
             return;
         }
         serverThread.sendDisconnectTrigger();
-        System.out.println(TextFX.colorize("Client " + serverThread.getDisplayName() + " disconnected.", Color.RED));
+        LoggerUtil.INSTANCE
+                .info(TextFX.colorize("Client " + serverThread.getDisplayName() + " disconnected.", Color.RED));
         connectedClients.remove(serverThread.getClientId());
         broadcastClientStatus(serverThread, false, false);
     }
@@ -199,8 +210,9 @@ public enum Server {
         connectedClients.values().removeIf(serverThread -> {
             boolean success = sendAction.apply(serverThread);
             if (!success) {
-                System.out.println(TextFX.colorize("Failed to send message to client " + serverThread.getDisplayName()
-                        + ". Removing from connected clients.", Color.RED));
+                LoggerUtil.INSTANCE
+                        .info(TextFX.colorize("Failed to send message to client " + serverThread.getDisplayName()
+                                + ". Removing from connected clients.", Color.RED));
                 disconnectedBuffer.add(serverThread);
             }
             return !success;
@@ -222,7 +234,7 @@ public enum Server {
     }
 
     public static void main(String[] args) {
-        System.out.println("Server Starting");
+        LoggerUtil.INSTANCE.info("Server Starting");
         Server server = Server.INSTANCE;
         int port = 3000;
         try {
@@ -231,6 +243,6 @@ public enum Server {
             // use default port
         }
         server.start(port);
-        System.out.println("Server Stopped");
+        LoggerUtil.INSTANCE.info("Server Stopped");
     }
 }

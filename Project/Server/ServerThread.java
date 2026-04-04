@@ -8,6 +8,7 @@ import Project.Common.ConnectionPayload;
 import Project.Common.Constants;
 import Project.Common.Payload;
 import Project.Common.PayloadType;
+import Project.Common.LoggerUtil;
 
 /**
  * Server-side handler for one connected client.
@@ -28,7 +29,8 @@ public class ServerThread extends BaseServerThread {
 
     @Override
     protected void info(String message) {
-        System.out.println(String.format("Thread[%s]: %s", this.getClientId(), message));
+        // Include client ID in the log for context
+        LoggerUtil.INSTANCE.info("[ClientId: " + this.getClientId() + "] " + message);
     }
 
     @Override
