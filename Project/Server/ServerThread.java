@@ -6,6 +6,8 @@ import java.util.function.Consumer;
 
 import Project.Common.ConnectionPayload;
 import Project.Common.Constants;
+import Project.Common.BoolPayload;
+import Project.Common.Phase;
 import Project.Common.Payload;
 import Project.Common.PayloadType;
 import Project.Common.LoggerUtil;
@@ -61,6 +63,12 @@ public class ServerThread extends BaseServerThread {
             case REVERSE:
                 processReverse(incoming);
                 break;
+            case READY:
+                processReady(incoming);
+                break;
+            case TURN:
+                processTurn(incoming);
+                break;
             default:
                 info("Received unsupported payload type: " + incoming.getPayloadType());
         }
@@ -68,6 +76,17 @@ public class ServerThread extends BaseServerThread {
 
     // Region used to hand off data to Server methods for processing
     // Start region for process*() methods ===================================
+
+    private void processTurn(Payload incoming) {
+        info("Processing turn payload");
+        Server.INSTANCE.handleTurn(this, incoming.getMessage());
+    }
+
+    private void processReady(Payload incoming) {
+        info("Processing ready payload");
+        Server.INSTANCE.handleReady(this);
+    }
+
     private void processDisconnect(Payload incoming) {
         info("Processing disconnect payload");
         Server.INSTANCE.handleDisconnect(this);
@@ -100,6 +119,32 @@ public class ServerThread extends BaseServerThread {
     // End region for process*() methods ===================================
 
     // Start region for send*() methods ===================================
+    protected boolean sendTurnStatus(long clientId, boolean hasTakenTurn) {
+        BoolPayload payload = new BoolPayload();
+        payload.setPayloadType(PayloadType.PLAYER_TURN_STATUS);
+        payload.setClientId(clientId);
+        payload.setValue(hasTakenTurn);
+        return sendToClient(payload);
+    }
+
+    protected boolean sendGamePhase(Phase phase) {
+        if (phase == null) {
+            LoggerUtil.INSTANCE.severe("Attempting to send null game phase to client. This should not happen.");
+            return true; // returning true so we don't cause a disconnect event
+        }
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.GAME_PHASE_SYNC);
+        payload.setMessage(phase.name());
+        return sendToClient(payload);
+    }
+
+    protected boolean sendReadyStatus(long clientId, boolean isReady) {
+        BoolPayload payload = new BoolPayload();
+        payload.setPayloadType(PayloadType.PLAYER_READY_STATUS);
+        payload.setClientId(clientId);
+        payload.setValue(isReady);
+        return sendToClient(payload);
+    }
 
     /**
      * Sends a disconnect trigger to the client before disconnecting. This allows
@@ -159,5 +204,6 @@ public class ServerThread extends BaseServerThread {
         payload.setMessage(message);
         return sendToClient(payload);
     }
+
     // End region for send*() methods ===================================
 }

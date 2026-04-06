@@ -3,6 +3,8 @@ package Project.Common;
 public class User {
     private long clientId = Constants.DEFAULT_CLIENT_ID;
     private String clientName;
+    private boolean ready;
+    private boolean turnTaken;
 
     public User() {
     }
@@ -44,8 +46,30 @@ public class User {
         return String.format("%s#%s", this.clientName, this.clientId);
     }
 
+    public boolean isReady() {
+        return ready;
+    }
+
+    public void setReady(boolean ready) {
+        this.ready = ready;
+    }
+
+    public boolean isTurnTaken() {
+        return turnTaken;
+    }
+
+    public void setTurnTaken(boolean turnTaken) {
+        this.turnTaken = turnTaken;
+    }
+
+    public void resetGameState() {
+        this.ready = false;
+        this.turnTaken = false;
+    }
+
     public void reset() {
         this.clientId = Constants.DEFAULT_CLIENT_ID;
         this.clientName = null;
+        resetGameState();
     }
 }

@@ -13,4 +13,9 @@ public enum PayloadType {
                   // (includes leaving client's id and name)
     SERVER_SYNC, // server notifying recipient of existing client
                  // (includes existing client's id and name) (silently)
+    READY, // client signals ready-check participation
+    TURN, // client submits a turn action
+    GAME_PHASE_SYNC, // server syncs current game phase to clients
+    PLAYER_READY_STATUS, // server syncs whether a user is ready
+    PLAYER_TURN_STATUS, // server syncs whether a user already took a turn
 }

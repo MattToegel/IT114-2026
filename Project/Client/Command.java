@@ -9,7 +9,11 @@ public enum Command {
     QUIT("/quit"),
     USERS("/users"),
     REVERSE("/reverse"),
-    SET_NAME("/name");
+    SET_NAME("/name"),
+    READY("/ready"),
+    TURN("/turn"),
+    VALIDATE_CLIENT("/togglecv"),// toggle client validation (for testing server-side validations)
+    ;
 
     private final String trigger;
 

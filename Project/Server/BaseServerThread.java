@@ -66,6 +66,30 @@ public abstract class BaseServerThread extends Thread {
         return this.user.getDisplayName();
     }
 
+    public boolean isReady() {
+        return this.user.isReady();
+    }
+
+    public void setReady(boolean ready) {
+        this.user.setReady(ready);
+    }
+
+    public boolean isTurnTaken() {
+        return this.user.isTurnTaken();
+    }
+
+    public void setTurnTaken(boolean turnTaken) {
+        this.user.setTurnTaken(turnTaken);
+    }
+
+    /**
+     * Resets the game state for this player. <br>
+     * Retains clientId/clientName references.
+     */
+    public void resetGameState() {
+        this.user.resetGameState();
+    }
+
     /**
      * A wrapper method so we don't need to keep typing out the long/complex sysout
      * line inside
