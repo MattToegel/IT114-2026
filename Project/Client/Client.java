@@ -212,8 +212,7 @@ public enum Client {
                 ValidationUtils.requirePhase(currentGamePhase, Phase.IN_PROGRESS);
                 ValidationUtils.requireParticipating(myUser.isReady());
                 ValidationUtils.requireTurnNotTaken(myUser.isTurnTaken());
-                validatedTurnAction = ValidationUtils.requireValidTurnOption(validatedTurnAction,
-                        "Invalid turn option. Use: rock, paper, or scissors");
+                validatedTurnAction = ValidationUtils.requireValidTurnOption(validatedTurnAction);
             } catch (ValidationException e) {
                 LoggerUtil.INSTANCE.warning(TextFX.colorize(e.getMessage(), Color.YELLOW));
                 return;
