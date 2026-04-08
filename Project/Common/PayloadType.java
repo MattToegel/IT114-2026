@@ -18,4 +18,6 @@ public enum PayloadType {
     GAME_PHASE_SYNC, // server syncs current game phase to clients
     PLAYER_READY_STATUS, // server syncs whether a user is ready
     PLAYER_TURN_STATUS, // server syncs whether a user already took a turn
+    POINTS, // server syncs a user's points
+    GUESS, // Used by client to send guess and server to confirm guess was received
 }

@@ -11,8 +11,9 @@ public enum Command {
     REVERSE("/reverse"),
     SET_NAME("/name"),
     READY("/ready"),
-    TURN("/turn"),
-    VALIDATE_CLIENT("/togglecv"),// toggle client validation (for testing server-side validations)
+    TURN("/turn"),// @Deprecated
+    VALIDATE_CLIENT("/togglecv"), // toggle client validation (for testing server-side validations)
+    GUESS("/guess"), // example game action command
     ;
 
     private final String trigger;

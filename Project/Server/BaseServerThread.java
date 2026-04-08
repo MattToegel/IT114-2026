@@ -82,6 +82,23 @@ public abstract class BaseServerThread extends Thread {
         this.user.setTurnTaken(turnTaken);
     }
 
+    // exposure of example user data
+    public int getGuess() {
+        return this.user.getGuess();
+    }
+
+    public void setGuess(int guess) {
+        this.user.setGuess(guess);
+    }
+
+    public int getPoints() {
+        return this.user.getPoints();
+    }
+
+    public void setPoints(int points) {
+        this.user.setPoints(points);
+    }
+
     /**
      * Resets the game state for this player. <br>
      * Retains clientId/clientName references.

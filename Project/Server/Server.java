@@ -82,9 +82,21 @@ public enum Server {
 
     // start region for handle*() methods ===================================
 
+    protected synchronized void handleGuess(ServerThread sender, String guess) {
+        if (!isGameServerActive()) {
+            return;
+        }
+        try {
+            gameServer.handleGuess(sender, guess);
+        } catch (Exception e) {
+            LoggerUtil.INSTANCE.severe("Game server handleGuess failed", e);
+        }
+    }
+
     /**
      * Passes user's turn action to the game session
      */
+    @Deprecated
     protected synchronized void handleTurn(ServerThread sender, String action) {
         if (!isGameServerActive()) {
             return;

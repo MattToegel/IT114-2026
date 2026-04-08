@@ -8,6 +8,7 @@ import Project.Common.ConnectionPayload;
 import Project.Common.Constants;
 import Project.Common.BoolPayload;
 import Project.Common.Phase;
+import Project.Common.PointsPayload;
 import Project.Common.Payload;
 import Project.Common.PayloadType;
 import Project.Common.LoggerUtil;
@@ -69,6 +70,9 @@ public class ServerThread extends BaseServerThread {
             case TURN:
                 processTurn(incoming);
                 break;
+            case GUESS:
+                processGuess(incoming);
+                break;
             default:
                 info("Received unsupported payload type: " + incoming.getPayloadType());
         }
@@ -76,6 +80,10 @@ public class ServerThread extends BaseServerThread {
 
     // Region used to hand off data to Server methods for processing
     // Start region for process*() methods ===================================
+    private void processGuess(Payload incoming) {
+        info("Processing guess payload");
+        Server.INSTANCE.handleGuess(this, incoming.getMessage());
+    }
 
     private void processTurn(Payload incoming) {
         info("Processing turn payload");
@@ -119,6 +127,25 @@ public class ServerThread extends BaseServerThread {
     // End region for process*() methods ===================================
 
     // Start region for send*() methods ===================================
+
+    protected boolean sendPlayerPoints(long clientId, int points) {
+        PointsPayload payload = new PointsPayload();
+        payload.setPayloadType(PayloadType.POINTS);
+        payload.setClientId(clientId);
+        payload.setPoints(points);
+        return sendToClient(payload);
+    }
+
+    protected boolean sendGuessConfirmation(int guess) {
+        // in this example the guess is a number, but since I want to keep the code
+        // changes minimal, I'll leverage PointsPayload to pass the confirmation back
+        // since it provides a slot for a number despite the name not making sense
+        PointsPayload payload = new PointsPayload();
+        payload.setPayloadType(PayloadType.GUESS);
+        payload.setPoints(guess); // abusing the points field to send the guess back for confirmation
+        return sendToClient(payload);
+    }
+
     protected boolean sendTurnStatus(long clientId, boolean hasTakenTurn) {
         BoolPayload payload = new BoolPayload();
         payload.setPayloadType(PayloadType.PLAYER_TURN_STATUS);

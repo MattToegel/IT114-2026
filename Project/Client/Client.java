@@ -18,6 +18,7 @@ import Project.Common.LoggerUtil;
 import Project.Common.Payload;
 import Project.Common.PayloadType;
 import Project.Common.Phase;
+import Project.Common.PointsPayload;
 import Project.Common.TextFX;
 import Project.Common.TextFX.Color;
 import Project.Common.User;
@@ -139,11 +140,13 @@ public enum Client {
             case USERS: // client-side command
                 StringBuilder sb = new StringBuilder();
                 sb.append("Known clients:\n");
-                knownUsers.values().forEach(c -> sb.append(String.format("%s%s Ready:%s Turn:%s\n",
+                knownUsers.values().forEach(c -> sb.append(String.format("%s%s Ready:%s Turn:%s Points:%s Guess:%s\n",
                         c.getDisplayName(),
                         c.getClientId() == myUser.getClientId() ? " (you)" : "",
                         c.isReady() ? "[x]" : "[ ]",
-                        c.isTurnTaken() ? "[x]" : "[ ]")));
+                        c.isTurnTaken() ? "[x]" : "[ ]",
+                        c.getPoints(),
+                        c.getGuess() == 0 ? "[?]" : c.getGuess())));
                 LoggerUtil.INSTANCE.info(TextFX.colorize(sb.toString().trim(), Color.CYAN));
                 return true;
             case REVERSE:
@@ -166,6 +169,7 @@ public enum Client {
             case READY:
                 sendReady();
                 return true;
+            // @Deprecated
             case TURN:
                 String turnAction = text.replaceFirst("/turn", "").trim();
                 sendTurn(turnAction);
@@ -176,12 +180,45 @@ public enum Client {
                         "Client-side validation " + (isLocalValidationEnabled ? "enabled" : "disabled"),
                         Color.GREEN));
                 return true;
+            // example game action
+            case GUESS:
+                String guessText = text.replaceFirst("/guess", "").trim();
+                sendGuess(guessText);
+                return true;
             default:
                 return false;
         }
     }
 
     // Start region for send*() methods ===================================
+    /**
+     * Sends a guess action to the server with the user's chosen option. <br>
+     * Wraps the action in a Payload object with PayloadType.GUESS.
+     *
+     * @param action
+     * @throws IOException
+     */
+    private void sendGuess(String action) throws IOException {
+        String validatedTurnAction = action == null ? "" : action.trim();
+
+        if (isLocalValidationEnabled) {
+            try {
+                ValidationUtils.requirePhase(currentGamePhase, Phase.IN_PROGRESS);
+                ValidationUtils.requireParticipating(myUser.isReady());
+                ValidationUtils.requireTurnNotTaken(myUser.isTurnTaken());
+                validatedTurnAction = ValidationUtils.requireValidTurnOption(validatedTurnAction);
+            } catch (ValidationException e) {
+                LoggerUtil.INSTANCE.warning(TextFX.colorize(e.getMessage(), Color.YELLOW));
+                return;
+            }
+        }
+
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.GUESS);
+        payload.setMessage(validatedTurnAction);
+        sendToServer(payload);
+    }
+
     /**
      * Sends a ready-check action to the server.
      */
@@ -204,6 +241,7 @@ public enum Client {
     /**
      * Sends a turn action to the server.
      */
+    @Deprecated
     private void sendTurn(String action) throws IOException {
         String validatedTurnAction = action == null ? "" : action.trim();
 
@@ -212,8 +250,7 @@ public enum Client {
                 ValidationUtils.requirePhase(currentGamePhase, Phase.IN_PROGRESS);
                 ValidationUtils.requireParticipating(myUser.isReady());
                 ValidationUtils.requireTurnNotTaken(myUser.isTurnTaken());
-                validatedTurnAction = ValidationUtils.requireValidTurnOption(validatedTurnAction,
-                        "Invalid turn option. Use: rock, paper, or scissors");
+                validatedTurnAction = ValidationUtils.requireValidTurnOption(validatedTurnAction);
             } catch (ValidationException e) {
                 LoggerUtil.INSTANCE.warning(TextFX.colorize(e.getMessage(), Color.YELLOW));
                 return;
@@ -221,7 +258,7 @@ public enum Client {
         }
 
         Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.TURN);
+        payload.setPayloadType(PayloadType.TURN); // updated for this specific example
         payload.setMessage(validatedTurnAction);
         sendToServer(payload);
     }
@@ -371,12 +408,51 @@ public enum Client {
                 LoggerUtil.INSTANCE.info("Server acknowledged disconnect. Closing connection.");
                 closeServerConnection();
                 break;
+            case GUESS:
+                processGuessConfirmation(payload);
+                break;
+            case POINTS:
+                processPoints(payload);
+                break;
             default:
                 LoggerUtil.INSTANCE.warning("Received unhandled payload type: " + payload.getPayloadType());
         }
     }
 
     // Start region for process*() methods ===================================
+    private void processPoints(Payload payload) {
+        if (!(payload instanceof PointsPayload)) {
+            LoggerUtil.INSTANCE.warning("Expected PointsPayload for POINTS confirmation, got: " + payload.getClass());
+            return;
+        }
+        long clientId = payload.getClientId();
+        int points = ((PointsPayload) payload).getPoints();
+        if (clientId == Constants.DEFAULT_CLIENT_ID) {
+            // reset points trigger for all users (if needing to reset during a session)
+            knownUsers.forEach((key, user) -> user.setPoints(0));
+            LoggerUtil.INSTANCE.info(TextFX.colorize("All users' points reset", Color.YELLOW));
+            return;
+        }
+        User user = knownUsers.get(clientId);
+        if (user == null) {
+            return;
+        }
+        user.setPoints(points); // updated directly from trusted server
+        LoggerUtil.INSTANCE.info(TextFX.colorize(
+                String.format("%s now has %d points", user.getDisplayName(), points),
+                Color.YELLOW));
+
+    }
+
+    private void processGuessConfirmation(Payload payload) {
+        if (!(payload instanceof PointsPayload)) {
+            LoggerUtil.INSTANCE.warning("Expected PointsPayload for GUESS confirmation, got: " + payload.getClass());
+            return;
+        }
+        int guess = ((PointsPayload) payload).getPoints(); // abusing the points field to receive the guess back
+        myUser.setGuess(guess); // update local state (example)
+        LoggerUtil.INSTANCE.info(TextFX.colorize("Your guess of " + guess + " has been recorded.", Color.GREEN));
+    }
 
     private void processTurnStatus(Payload payload) {
         if (!(payload instanceof BoolPayload)) {

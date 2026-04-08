@@ -143,11 +143,16 @@ public final class ValidationUtils {
     public static String requireValidTurnOption(String value, String errorMessage)
             throws InvalidTurnOptionException {
         String normalized = value == null ? "" : value.trim().toLowerCase();
-        // this is just an example, the || true always passes, you'd remove it and
-        // create your own custom checks if/when necessary
-        boolean valid = normalized.equals("example") || true;
-        if (!valid) {
-            throw new InvalidTurnOptionException(errorMessage);
+
+        // example validation for example game
+        // requires a number between 1 and 10 (inclusive)
+        try {
+            int guess = Integer.parseInt(normalized);
+            if (guess < 1 || guess > 10) {
+                throw new InvalidTurnOptionException("Please enter a number between 1 and 10.");
+            }
+        } catch (NumberFormatException e) {
+            throw new InvalidTurnOptionException("Please enter a valid number.");
         }
         return normalized;
     }

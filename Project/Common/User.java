@@ -5,6 +5,8 @@ public class User {
     private String clientName;
     private boolean ready;
     private boolean turnTaken;
+    private int guess = 0;// example user data
+    private int points = 0;
 
     public User() {
     }
@@ -19,6 +21,34 @@ public class User {
      */
     public long getClientId() {
         return clientId;
+    }
+
+    /**
+     * @return the points
+     */
+    public int getPoints() {
+        return points;
+    }
+
+    /**
+     * @param points the points to set
+     */
+    public void setPoints(int points) {
+        this.points = points;
+    }
+
+    /**
+     * @return the guess
+     */
+    public int getGuess() {
+        return guess;
+    }
+
+    /**
+     * @param guess the guess to set
+     */
+    public void setGuess(int guess) {
+        this.guess = guess;
     }
 
     /**
@@ -65,6 +95,8 @@ public class User {
     public void resetGameState() {
         this.ready = false;
         this.turnTaken = false;
+        this.guess = 0; // example user data
+        this.points = 0;
     }
 
     public void reset() {
