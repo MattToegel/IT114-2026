@@ -41,7 +41,9 @@ public class GameServer extends BaseGameServer {
         if (client == null) {
             return;
         }
-
+        if (phase == Phase.INACTIVE) {
+            return; // nothing to sync if the session isn't active
+        }
         LoggerUtil.INSTANCE.info("[GameServer] Player joined via ready: " + client.getDisplayName());
         unicastGameMessage(client, "Joined as active player. Waiting room status: "
                 + getActivePlayerCount() + "/" + MIN_PLAYERS_TO_START + " ready.");
@@ -73,7 +75,7 @@ public class GameServer extends BaseGameServer {
     protected synchronized void onSessionStart() {
         LoggerUtil.INSTANCE.info("[GameServer] onSessionStart() start");
         resetReadyTimer();
-
+        roundNumber = 0;
         broadcastGameMessage("Session started.");
         LoggerUtil.INSTANCE.info("[GameServer] onSessionStart() end");
         onRoundStart();
