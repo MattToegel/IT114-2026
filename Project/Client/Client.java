@@ -438,9 +438,13 @@ public enum Client {
             return;
         }
         user.setPoints(points); // updated directly from trusted server
-        LoggerUtil.INSTANCE.info(TextFX.colorize(
-                String.format("%s now has %d points", user.getDisplayName(), points),
-                Color.YELLOW));
+        if (currentGamePhase.ordinal() >= Phase.IN_PROGRESS.ordinal()) {
+            // only print point updates during the game; before the game starts, points may
+            // be changing frequently as users ready/unready
+            LoggerUtil.INSTANCE.info(TextFX.colorize(
+                    String.format("%s now has %d points", user.getDisplayName(), points),
+                    Color.YELLOW));
+        }
 
     }
 

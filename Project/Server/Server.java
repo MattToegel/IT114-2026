@@ -235,6 +235,11 @@ public enum Server {
         }
         // onClientRemoved can be called during initialization to trigger
         // onPlayerJoined/onPlayerLeft hooks
+        try {
+            gameServer.onSpectatorJoined(serverThread);
+        } catch (Exception e) {
+            LoggerUtil.INSTANCE.severe("Game server onSpectatorJoined failed", e);
+        }
     }
 
     private void notifyGameServerClientRemoved(ServerThread serverThread) {

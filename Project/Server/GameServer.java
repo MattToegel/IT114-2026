@@ -37,6 +37,19 @@ public class GameServer extends BaseGameServer {
 
     // start region for lifecycle hook implementations
     @Override
+    protected void onSpectatorJoined(ServerThread client) {
+        if (client == null) {
+            return;
+        }
+        if (phase == Phase.INACTIVE) {
+            return; // nothing to sync if the session isn't active
+        }
+        LoggerUtil.INSTANCE.info("[GameServer] Spectator joined: " + client.getDisplayName());
+        unicastGameMessage(client, "Joined as spectator. Current active players: " + getActivePlayerCount());
+        unicastGameStateToJoiner(client);
+    }
+
+    @Override
     protected void onPlayerJoined(ServerThread client) {
         if (client == null) {
             return;
@@ -47,8 +60,9 @@ public class GameServer extends BaseGameServer {
         LoggerUtil.INSTANCE.info("[GameServer] Player joined via ready: " + client.getDisplayName());
         unicastGameMessage(client, "Joined as active player. Waiting room status: "
                 + getActivePlayerCount() + "/" + MIN_PLAYERS_TO_START + " ready.");
-        unicastCurrentPhase(client);
-        unicastGameStateToJoiner(client);
+        if (phase != Phase.READY) {
+            unicastGameStateToJoiner(client);
+        }
         broadcastGameMessage(client.getDisplayName() + " joined active players.");
         broadcastGameMessage("Active players: " + getActivePlayerCount());
     }
@@ -397,18 +411,26 @@ public class GameServer extends BaseGameServer {
                 serverThread -> serverThread.sendPlayerPoints(player.getClientId(), player.getPoints()));
     }
 
+    private void unicastPlayerPoints(ServerThread target, long clientId, int points) {
+        if (target == null) {
+            return;
+        }
+        Server.INSTANCE.unicast(target, serverThread -> serverThread.sendPlayerPoints(clientId, points));
+    }
+
     private void unicastGuessConfirmation(ServerThread target, int guess) {
         Server.INSTANCE.unicast(target, serverThread -> serverThread.sendGuessConfirmation(guess));
     }
 
     /**
-     * Sends all existing active players' ready and turn states to a newly joined
-     * player.
+     * Sends the current phase plus all existing active players' ready, turn, and
+     * points state to a newly joined player.
      */
     private void unicastGameStateToJoiner(ServerThread joiner) {
         if (joiner == null) {
             return;
         }
+        unicastCurrentPhase(joiner);
         List<ServerThread> snapshot = new ArrayList<>(getActivePlayers());
         for (ServerThread player : snapshot) {
             if (player.getClientId() == joiner.getClientId()) {
@@ -416,6 +438,7 @@ public class GameServer extends BaseGameServer {
             }
             unicastReadyStatus(joiner, player.getClientId(), player.isReady());
             unicastTurnStatus(joiner, player.getClientId(), player.isTurnTaken());
+            unicastPlayerPoints(joiner, player.getClientId(), player.getPoints());
         }
     }
 
