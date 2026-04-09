@@ -61,6 +61,11 @@ public abstract class BaseGameServer {
     }
 
     // === Lifecycle hooks for subclasses to implement ===
+    /**
+     * Called when a non-participating client joins the session. Useful for
+     * spectator logic.
+     */
+    protected abstract void onSpectatorJoined(ServerThread client);
 
     /**
      * Called when a client joins the game session via ready check.
