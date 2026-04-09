@@ -127,6 +127,12 @@ public class ServerThread extends BaseServerThread {
     // End region for process*() methods ===================================
 
     // Start region for send*() methods ===================================
+    protected boolean sendCurrentTurn(long clientId) {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.CURRENT_TURN);
+        payload.setClientId(clientId);
+        return sendToClient(payload);
+    }
 
     protected boolean sendPlayerPoints(long clientId, int points) {
         PointsPayload payload = new PointsPayload();

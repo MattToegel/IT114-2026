@@ -6,6 +6,7 @@ import Project.Exceptions.ConditionValidationException;
 import Project.Exceptions.DuplicateTurnChoiceException;
 import Project.Exceptions.InvalidGamePhaseException;
 import Project.Exceptions.InvalidTurnOptionException;
+import Project.Exceptions.NotPlayersTurnException;
 import Project.Exceptions.NullValidationException;
 import Project.Exceptions.PlayerNotParticipatingException;
 
@@ -123,15 +124,15 @@ public final class ValidationUtils {
     }
 
     public static void requireCurrentPlayer(Long currentTurnPlayerId,
-            long senderClientId) throws ConditionValidationException {
+            long senderClientId) throws NotPlayersTurnException {
         requireCurrentPlayer(currentTurnPlayerId, senderClientId, DEFAULT_CURRENT_PLAYER_MESSAGE);
     }
 
     public static void requireCurrentPlayer(Long currentTurnPlayerId,
             long senderClientId,
-            String errorMessage) throws ConditionValidationException {
+            String errorMessage) throws NotPlayersTurnException {
         if (currentTurnPlayerId == null || currentTurnPlayerId.longValue() != senderClientId) {
-            throw new ConditionValidationException(errorMessage);
+            throw new NotPlayersTurnException(errorMessage);
         }
     }
 

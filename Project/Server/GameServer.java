@@ -1,6 +1,7 @@
 package Project.Server;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Random;
 
@@ -49,6 +50,7 @@ public class GameServer extends BaseGameServer {
                 + getActivePlayerCount() + "/" + MIN_PLAYERS_TO_START + " ready.");
         unicastCurrentPhase(client);
         unicastGameStateToJoiner(client);
+        unicastCurrentPlayer(client);
         broadcastGameMessage(client.getDisplayName() + " joined active players.");
         broadcastGameMessage("Active players: " + getActivePlayerCount());
     }
@@ -65,9 +67,18 @@ public class GameServer extends BaseGameServer {
             onSessionEnd();
             return;
         }
-        if (phase == Phase.IN_PROGRESS && getActivePlayerCount() < MIN_PLAYERS_TO_START) {
+        if (phase != Phase.INACTIVE && getActivePlayerCount() < MIN_PLAYERS_TO_START) {
             broadcastGameMessage("Not enough active players to continue.");
             onSessionEnd();
+            return;
+        }
+        // If the player who just left was holding the current turn, advance immediately
+        // rather than waiting for the turn timer to expire.
+        if (phase != Phase.INACTIVE
+                && currentTurnPlayerId != null
+                && currentTurnPlayerId == client.getClientId()) {
+            broadcastGameMessage(client.getDisplayName() + " left during their turn. Advancing turn.");
+            onTurnEnd();
         }
     }
 
@@ -76,6 +87,7 @@ public class GameServer extends BaseGameServer {
         LoggerUtil.INSTANCE.info("[GameServer] onSessionStart() start");
         resetReadyTimer();
         roundNumber = 0;
+        currentTurnPlayerId = null;
         broadcastGameMessage("Session started.");
         LoggerUtil.INSTANCE.info("[GameServer] onSessionStart() end");
         onRoundStart();
@@ -85,7 +97,8 @@ public class GameServer extends BaseGameServer {
     protected synchronized void onRoundStart() {
         LoggerUtil.INSTANCE.info("[GameServer] onRoundStart() start");
         resetRoundTimer();
-        startRoundTimer();
+        // startRoundTimer(); // Round timer generally isn't useful during individual
+        // turns (unless you do something like <Num Players> * <Turn Duration>)
         phase = Phase.IN_PROGRESS; // toggle from READY or EVALUATION
         broadcastCurrentPhase();
         for (ServerThread player : getActivePlayers()) {
@@ -97,10 +110,8 @@ public class GameServer extends BaseGameServer {
         // example round setup
         hiddenNumber = new Random().nextInt(10) + 1;
         broadcastGameMessage("A random number between 1-10 has been chosen, use /guess <value> to guess.");
-
         LoggerUtil.INSTANCE.info("[GameServer] onRoundStart() end");
-        // onTurnStart(); this example doesn't use turns, all players take their
-        // turn simultaneously within the round time limit
+        onTurnStart(); // this example users onTurnStart() for individual turn pacing
     }
 
     @Override
@@ -113,13 +124,27 @@ public class GameServer extends BaseGameServer {
             onSessionEnd();
             return;
         }
-        // TODO: pick next player (covered in a future lesson, below is a temporary
-        // scaffold that just picks the first active player)
-        ServerThread chosen = snapshot.get(0); // simple scaffold: first active player
-        currentTurnPlayerId = chosen.getClientId();
 
+        snapshot.sort(Comparator.comparingLong(ServerThread::getClientId));
+
+        // Find the first player in sorted order who hasn't taken their turn yet.
+        ServerThread currentPlayer = snapshot.stream()
+                .filter(p -> !p.isTurnTaken())
+                .findFirst()
+                .orElse(null);
+
+        if (currentPlayer == null) {
+            // This shouldn't happen: onTurnEnd() guards the allTookTurn check before
+            // calling onTurnStart(), so there should always be a player waiting.
+            LoggerUtil.INSTANCE.severe("[GameServer] onTurnStart() called but no player without a turn was found.");
+            return;
+        }
+
+        currentTurnPlayerId = currentPlayer.getClientId();
         startTurnTimer();
-        broadcastGameMessage("Turn started for " + chosen.getDisplayName() + ". Use /turn <action> within "
+        broadcastCurrentTurn(); // Message is generated on the client-side based on the clientId
+        // Potentially excessive, notes whose turn it is and tells how to take a turn
+        broadcastGameMessage("Turn started for " + currentPlayer.getDisplayName() + ". Use /guess <value> within "
                 + TURN_SECONDS + "s.");
         LoggerUtil.INSTANCE.info("[GameServer] onTurnStart() end");
     }
@@ -128,7 +153,7 @@ public class GameServer extends BaseGameServer {
     protected synchronized void onTurnEnd() {
         LoggerUtil.INSTANCE.info("[GameServer] onTurnEnd() start");
         resetTurnTimer();
-        currentTurnPlayerId = null;
+
         LoggerUtil.INSTANCE.info("[GameServer] onTurnEnd() end");
         // onRoundEnd(); this example doesn't use turns, but this hook is called at the
         // end of handleTurn() and we don't want it to end the round
@@ -140,6 +165,8 @@ public class GameServer extends BaseGameServer {
             // NOTE: be careful to not have two closely timed flows both call onRoundEnd()
             // simultaneously
             onRoundEnd();
+        } else {
+            onTurnStart(); // start next turn immediately after previous turn ends
         }
     }
 
@@ -176,7 +203,6 @@ public class GameServer extends BaseGameServer {
         }
 
         LoggerUtil.INSTANCE.info("[GameServer] onRoundEnd() end");
-        // TODO: add logic to determine if session should end or next round should
 
         if (roundNumber >= 5) { // arbitrary end condition for example purposes
             onSessionEnd();
@@ -289,6 +315,15 @@ public class GameServer extends BaseGameServer {
         try {
             ValidationUtils.requireParticipating(isActivePlayer(sender));
             ValidationUtils.requirePhase(phase, Phase.IN_PROGRESS);
+            ValidationUtils.requireTurnNotTaken(sender.isTurnTaken()); // optional check to prevent multiple guesses if
+                                                                       // you want to enforce one guess per turn; can be
+                                                                       // removed and adjusted for more flexible rules
+                                                                       // (would need to decide how to handle multiple
+                                                                       // guesses in the game logic, like take the first
+                                                                       // guess, average them, etc.)
+            ValidationUtils.requireCurrentPlayer(currentTurnPlayerId, sender.getClientId()); // Key validation to ensure
+                                                                                             // individual turn order is
+                                                                                             // enforced
             guess = ValidationUtils.requireValidTurnOption(guess.trim());
             // although validation should verify it's a number, I'll see do a try/catch just
             // in case
@@ -383,6 +418,22 @@ public class GameServer extends BaseGameServer {
     // end region for handle*() methods called by Server
 
     // start region for helper methods to send data to clients
+
+    /** Sends the current turn owner to a single client when applicable. */
+    private void unicastCurrentPlayer(ServerThread target) {
+        if (target == null || currentTurnPlayerId == null) {
+            return;
+        }
+        Server.INSTANCE.unicast(target, serverThread -> serverThread.sendCurrentTurn(currentTurnPlayerId));
+    }
+
+    /** Sends the current turn owner to all connected clients when applicable. */
+    private void broadcastCurrentTurn() {
+        if (currentTurnPlayerId == null) {
+            return;
+        }
+        Server.INSTANCE.sendOrDisconnect(serverThread -> serverThread.sendCurrentTurn(currentTurnPlayerId));
+    }
 
     private void broadcastPointsReset() { // optional reset for specific property, but we'll leverage the READY reset as
                                           // a full reset for simplicity in this example

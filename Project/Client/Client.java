@@ -414,12 +414,23 @@ public enum Client {
             case POINTS:
                 processPoints(payload);
                 break;
+            case CURRENT_TURN:
+                processCurrentTurn(payload);
+                break;
             default:
                 LoggerUtil.INSTANCE.warning("Received unhandled payload type: " + payload.getPayloadType());
         }
     }
 
     // Start region for process*() methods ===================================
+    private void processCurrentTurn(Payload payload) {
+        long currentTurnClientId = payload.getClientId();
+        User currentTurnUser = knownUsers.get(currentTurnClientId);
+        // Use local map for name lookup
+        String currentTurnName = currentTurnUser != null ? currentTurnUser.getDisplayName() : "Unknown";
+        LoggerUtil.INSTANCE.info(TextFX.colorize("Current turn: " + currentTurnName, Color.YELLOW));
+    }
+
     private void processPoints(Payload payload) {
         if (!(payload instanceof PointsPayload)) {
             LoggerUtil.INSTANCE.warning("Expected PointsPayload for POINTS confirmation, got: " + payload.getClass());

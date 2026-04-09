@@ -20,4 +20,5 @@ public enum PayloadType {
     PLAYER_TURN_STATUS, // server syncs whether a user already took a turn
     POINTS, // server syncs a user's points
     GUESS, // Used by client to send guess and server to confirm guess was received
+    CURRENT_TURN, // server syncs which client's turn it currently is
 }
