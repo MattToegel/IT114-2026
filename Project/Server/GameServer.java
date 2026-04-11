@@ -166,7 +166,16 @@ public class GameServer extends BaseGameServer {
     protected synchronized void onTurnEnd() {
         LoggerUtil.INSTANCE.info("[GameServer] onTurnEnd() start");
         resetTurnTimer();
-
+        // if the current player didn't take their turn, mark it as complete and sync
+        // this prevents infinite turn loops
+        if (currentTurnPlayerId != null) {
+            ServerThread currentPlayer = activePlayers.get(currentTurnPlayerId);
+            if (currentPlayer != null && !currentPlayer.isTurnTaken()) {
+                currentPlayer.setTurnTaken(true);
+                broadcastTurnStatus(currentPlayer.getClientId(), true);
+                broadcastGameMessage(currentPlayer.getDisplayName() + " ran out of time and missed their turn.");
+            }
+        }
         LoggerUtil.INSTANCE.info("[GameServer] onTurnEnd() end");
         // onRoundEnd(); this example doesn't use turns, but this hook is called at the
         // end of handleTurn() and we don't want it to end the round
