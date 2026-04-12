@@ -23,8 +23,54 @@ public final class ValidationUtils {
     private static final String DEFAULT_TURN_TAKEN_MESSAGE = "You already made your choice for this round.";
     private static final String DEFAULT_CURRENT_PLAYER_MESSAGE = "Please wait for your turn.";
     private static final String DEFAULT_TURN_OPTION_MESSAGE = "That turn option is not available.";
+    private static final String DEFAULT_OUT_OF_BOUNDS_MESSAGE = "That coordinate is out of bounds.";
+    private static final String DEFAULT_INVALID_CELL_VALUE_MESSAGE = "Cell value must be between 0 and 9.";
 
     private ValidationUtils() {
+    }
+
+    public static boolean isNullOrBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    public static boolean hasValidDimensions(int width, int height) {
+        return width > 0 && height > 0;
+    }
+
+    public static boolean isInBounds(int x, int y, int width, int height) {
+        return hasValidDimensions(width, height)
+                && x >= 0
+                && y >= 0
+                && x < width
+                && y < height;
+    }
+
+    public static boolean isValidCellValue(int value) {
+        return value >= 0 && value <= 9;
+    }
+
+    public static void requireInBounds(int x, int y, int width, int height)
+            throws ConditionValidationException {
+        requireInBounds(x, y, width, height, DEFAULT_OUT_OF_BOUNDS_MESSAGE);
+    }
+
+    public static void requireInBounds(int x, int y, int width, int height, String errorMessage)
+            throws ConditionValidationException {
+        if (!isInBounds(x, y, width, height)) {
+            throw new ConditionValidationException(errorMessage);
+        }
+    }
+
+    public static void requireValidCellValue(int value)
+            throws ConditionValidationException {
+        requireValidCellValue(value, DEFAULT_INVALID_CELL_VALUE_MESSAGE);
+    }
+
+    public static void requireValidCellValue(int value, String errorMessage)
+            throws ConditionValidationException {
+        if (!isValidCellValue(value)) {
+            throw new ConditionValidationException(errorMessage);
+        }
     }
 
     public static void requireTrue(boolean condition) throws ConditionValidationException {

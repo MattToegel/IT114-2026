@@ -14,6 +14,9 @@ import java.util.regex.Pattern;
 import M4.MCCS.Part1.Constants;
 import Project.Common.ConnectionPayload;
 import Project.Common.BoolPayload;
+import Project.Common.Grid;
+import Project.Common.GridCellPayload;
+import Project.Common.GridSeedPayload;
 import Project.Common.LoggerUtil;
 import Project.Common.Payload;
 import Project.Common.PayloadType;
@@ -54,6 +57,8 @@ public enum Client {
     // id
     private volatile Phase currentGamePhase = Phase.INACTIVE;
     private volatile boolean isLocalValidationEnabled = true;
+    private volatile Grid localGrid;
+    private volatile long localGridSeed = 0L;
 
     private Client() {
         LoggerUtil.INSTANCE.info("Client Created");
@@ -180,15 +185,40 @@ public enum Client {
                         "Client-side validation " + (isLocalValidationEnabled ? "enabled" : "disabled"),
                         Color.GREEN));
                 return true;
-            // example game action
+            // @Deprecated
             case GUESS:
                 String guessText = text.replaceFirst("/guess", "").trim();
                 sendGuess(guessText);
+                return true;
+            case GRID:
+                printLocalGrid();
+                return true;
+            case GRID_TEST:
+                String gridTestArgs = text.replaceFirst("/gridtest", "").trim();
+                sendGridTestUpdate(gridTestArgs);
                 return true;
             default:
                 return false;
         }
     }
+
+    // start region for misc
+    private void printLocalGrid() {
+        if (localGrid == null || localGrid.getWidth() <= 0 || localGrid.getHeight() <= 0) {
+            LoggerUtil.INSTANCE.info(TextFX.colorize("[Game] Grid is not initialized yet.", Color.YELLOW));
+            return;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("[Game] Local grid (%dx%d) seed=%d\n",
+                localGrid.getWidth(),
+                localGrid.getHeight(),
+                localGridSeed));
+        sb.append(localGrid.toGridString());
+
+        LoggerUtil.INSTANCE.info(TextFX.colorize(sb.toString(), Color.CYAN));
+    }
+    // end region for misc
 
     // Start region for send*() methods ===================================
     /**
@@ -198,6 +228,7 @@ public enum Client {
      * @param action
      * @throws IOException
      */
+    @Deprecated // @Deprecated guess flow
     private void sendGuess(String action) throws IOException {
         String validatedTurnAction = action == null ? "" : action.trim();
 
@@ -216,6 +247,46 @@ public enum Client {
         Payload payload = new Payload();
         payload.setPayloadType(PayloadType.GUESS);
         payload.setMessage(validatedTurnAction);
+        sendToServer(payload);
+    }
+
+    private void sendGridTestUpdate(String args) throws IOException {
+        String[] parts = args == null ? new String[0] : args.trim().split("\\s+");
+        if (parts.length != 3) {
+            LoggerUtil.INSTANCE.warning("Usage: /gridtest <x> <y> <value 0-9>");
+            return;
+        }
+
+        int x;
+        int y;
+        int value;
+        try {
+            x = Integer.parseInt(parts[0]);
+            y = Integer.parseInt(parts[1]);
+            value = Integer.parseInt(parts[2]);
+        } catch (NumberFormatException e) {
+            LoggerUtil.INSTANCE.warning("Usage: /gridtest <x> <y> <value 0-9>");
+            return;
+        }
+
+        if (isLocalValidationEnabled) {
+            try {
+                ValidationUtils.requireValidCellValue(value);
+                if (localGrid != null) {
+                    ValidationUtils.requireInBounds(x, y, localGrid.getWidth(), localGrid.getHeight());
+                }
+            } catch (ValidationException e) {
+                LoggerUtil.INSTANCE.warning(TextFX.colorize(e.getMessage(), Color.YELLOW));
+                return;
+            }
+        }
+
+        GridCellPayload payload = new GridCellPayload();
+        // temporary: reusing GRID_CELL_SYNC for client->server test updates
+        payload.setPayloadType(PayloadType.GRID_CELL_SYNC);
+        payload.setX(x);
+        payload.setY(y);
+        payload.setValue(value);
         sendToServer(payload);
     }
 
@@ -417,12 +488,74 @@ public enum Client {
             case CURRENT_TURN:
                 processCurrentTurn(payload);
                 break;
+            case GRID_SEED_SYNC:
+                processGridSeedSync(payload);
+                break;
+            case GRID_CELL_SYNC:
+                processGridCellSync(payload);
+                break;
             default:
                 LoggerUtil.INSTANCE.warning("Received unhandled payload type: " + payload.getPayloadType());
         }
     }
 
     // Start region for process*() methods ===================================
+    private void processGridSeedSync(Payload payload) {
+        if (!(payload instanceof GridSeedPayload)) {
+            LoggerUtil.INSTANCE.warning("Expected GridSeedPayload for GRID_SEED_SYNC, got: " + payload.getClass());
+            return;
+        }
+        GridSeedPayload gsp = (GridSeedPayload) payload;
+        if (!ValidationUtils.hasValidDimensions(gsp.getWidth(), gsp.getHeight())) {
+            LoggerUtil.INSTANCE.info(TextFX.colorize(
+                    "[Game] Grid reset trigger received from server.",
+                    Color.YELLOW));
+            clearLocalGrid();
+            return;
+        }
+
+        clearLocalGrid();
+        localGridSeed = gsp.getSeed();
+        Grid grid = new Grid();
+        grid.setSize(gsp.getWidth(), gsp.getHeight());
+        grid.setToRandom(localGridSeed);
+        localGrid = grid;
+        LoggerUtil.INSTANCE.info(TextFX.colorize(
+                String.format("[Game] Grid seeded (%dx%d) with seed %d", gsp.getWidth(), gsp.getHeight(),
+                        localGridSeed),
+                Color.YELLOW));
+        LoggerUtil.INSTANCE.info(TextFX.colorize("\n" + localGrid.toGridString(), Color.CYAN));
+    }
+
+    private void processGridCellSync(Payload payload) {
+        if (!(payload instanceof GridCellPayload)) {
+            LoggerUtil.INSTANCE.warning("Expected GridCellPayload for GRID_CELL_SYNC, got: " + payload.getClass());
+            return;
+        }
+        GridCellPayload gcp = (GridCellPayload) payload;
+        if (localGrid == null) {
+            LoggerUtil.INSTANCE.warning("Received GRID_CELL_SYNC before local grid was initialized.");
+            return;
+        }
+        if (!ValidationUtils.isInBounds(gcp.getX(), gcp.getY(), localGrid.getWidth(), localGrid.getHeight())) {
+            LoggerUtil.INSTANCE.warning(String.format(
+                    "Received out-of-bounds GRID_CELL_SYNC for (%d,%d).",
+                    gcp.getX(),
+                    gcp.getY()));
+            return;
+        }
+        localGrid.setValue(gcp.getX(), gcp.getY(), gcp.getValue());
+        LoggerUtil.INSTANCE.info(TextFX.colorize("\n" + localGrid.toGridString(), Color.CYAN));
+    }
+
+    private void clearLocalGrid() {
+        if (localGrid != null) {
+            localGrid.clear();
+            localGrid = null;
+        }
+        localGridSeed = 0L;
+    }
+
     private void processCurrentTurn(Payload payload) {
         long currentTurnClientId = payload.getClientId();
         User currentTurnUser = knownUsers.get(currentTurnClientId);
@@ -525,7 +658,7 @@ public enum Client {
 
     private void processGamePhaseSync(Payload payload) {
         String phaseValue = payload.getMessage();
-        if (phaseValue == null || phaseValue.isBlank()) {
+        if (ValidationUtils.isNullOrBlank(phaseValue)) {
             LoggerUtil.INSTANCE.warning("Received invalid GAME_PHASE_SYNC payload");
             return;
         }
@@ -650,6 +783,7 @@ public enum Client {
         knownUsers.clear();
         myUser.reset();
         currentGamePhase = Phase.INACTIVE;
+        clearLocalGrid();
         try {
             if (out != null) {
                 LoggerUtil.INSTANCE.info("Closing output stream");

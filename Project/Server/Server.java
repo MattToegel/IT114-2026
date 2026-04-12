@@ -93,6 +93,17 @@ public enum Server {
         }
     }
 
+    protected synchronized void handleGridTestUpdate(ServerThread sender, int x, int y, int value) {
+        if (!isGameServerActive()) {
+            return;
+        }
+        try {
+            gameServer.handleGridTestUpdate(sender, x, y, value);
+        } catch (Exception e) {
+            LoggerUtil.INSTANCE.severe("Game server handleGridTestUpdate failed", e);
+        }
+    }
+
     /**
      * Passes user's turn action to the game session
      */

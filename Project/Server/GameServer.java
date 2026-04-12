@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Random;
 
 import M4.MCCS.Part1.Constants;
+import Project.Common.Grid;
 import Project.Common.LoggerUtil;
 import Project.Common.Phase;
 import Project.Common.TimedEvent;
@@ -26,6 +27,8 @@ public class GameServer extends BaseGameServer {
     private static final int ROUND_SECONDS = 30;
     private static final int TURN_SECONDS = 20;
     private static final String GAME_TAG = "[Game] ";
+    private static final int GRID_WIDTH = 5;
+    private static final int GRID_HEIGHT = 5;
 
     private volatile Phase phase = Phase.INACTIVE;
     private volatile TimedEvent readyTimer;
@@ -33,8 +36,11 @@ public class GameServer extends BaseGameServer {
     private volatile TimedEvent turnTimer;
     private volatile Long currentTurnPlayerId;
     private int roundNumber = 0;
-    // example data
+    // @Deprecated guess flow example data
+    @Deprecated
     private int hiddenNumber = 0;
+    private volatile Grid currentGrid;
+    private volatile long currentGridSeed = 0L;
 
     // start region for lifecycle hook implementations
     @Override
@@ -101,6 +107,17 @@ public class GameServer extends BaseGameServer {
         resetReadyTimer();
         roundNumber = 0;
         currentTurnPlayerId = null;
+
+        clearCurrentGrid();
+
+        currentGridSeed = System.currentTimeMillis();
+        currentGrid = new Grid();
+        currentGrid.setSize(GRID_WIDTH, GRID_HEIGHT);
+        currentGrid.setToRandom(currentGridSeed);
+        LoggerUtil.INSTANCE.info("[GameServer] Current grid:\n" + currentGrid.toGridString());
+
+        broadcastGridSeed();
+
         broadcastGameMessage("Session started.");
         LoggerUtil.INSTANCE.info("[GameServer] onSessionStart() end");
         onRoundStart();
@@ -119,10 +136,10 @@ public class GameServer extends BaseGameServer {
             broadcastTurnStatus(player.getClientId(), false);
         }
         roundNumber++; // TODO: future lessons may sync this as number later for better UI visibility
-        broadcastGameMessage("Round " + roundNumber + " started. You have " + ROUND_SECONDS + "s total.");
+        broadcastGameMessage("Round " + roundNumber + " started. Each player gets one grid action.");
         // example round setup
         hiddenNumber = new Random().nextInt(10) + 1;
-        broadcastGameMessage("A random number between 1-10 has been chosen, use /guess <value> to guess.");
+        broadcastGameMessage("Use /gridtest <x> <y> <value 0-9> on your turn.");
         LoggerUtil.INSTANCE.info("[GameServer] onRoundStart() end");
         onTurnStart(); // this example users onTurnStart() for individual turn pacing
     }
@@ -156,9 +173,8 @@ public class GameServer extends BaseGameServer {
         currentTurnPlayerId = currentPlayer.getClientId();
         startTurnTimer();
         broadcastCurrentTurn(); // Message is generated on the client-side based on the clientId
-        // Potentially excessive, notes whose turn it is and tells how to take a turn
-        broadcastGameMessage("Turn started for " + currentPlayer.getDisplayName() + ". Use /guess <value> within "
-                + TURN_SECONDS + "s.");
+        broadcastGameMessage("Turn started for " + currentPlayer.getDisplayName()
+                + ". Use /gridtest <x> <y> <value 0-9> within " + TURN_SECONDS + "s.");
         LoggerUtil.INSTANCE.info("[GameServer] onTurnStart() end");
     }
 
@@ -166,7 +182,16 @@ public class GameServer extends BaseGameServer {
     protected synchronized void onTurnEnd() {
         LoggerUtil.INSTANCE.info("[GameServer] onTurnEnd() start");
         resetTurnTimer();
-
+        // if the current player didn't take their turn, mark it as complete and sync
+        // this prevents infinite turn loops
+        if (currentTurnPlayerId != null) {
+            ServerThread currentPlayer = activePlayers.get(currentTurnPlayerId);
+            if (currentPlayer != null && !currentPlayer.isTurnTaken()) {
+                currentPlayer.setTurnTaken(true);
+                broadcastTurnStatus(currentPlayer.getClientId(), true);
+                broadcastGameMessage(currentPlayer.getDisplayName() + " ran out of time and missed their turn.");
+            }
+        }
         LoggerUtil.INSTANCE.info("[GameServer] onTurnEnd() end");
         // onRoundEnd(); this example doesn't use turns, but this hook is called at the
         // end of handleTurn() and we don't want it to end the round
@@ -197,23 +222,27 @@ public class GameServer extends BaseGameServer {
         resetRoundTimer();
         broadcastGameMessage("Round ended.");
 
-        // example process round end logic; everyone gains a point for a correct guess
-        broadcastGameMessage("Evaluating guesses... The correct number was " + hiddenNumber);
-        List<ServerThread> snapshot = new ArrayList<>(getActivePlayers());
-        for (ServerThread player : snapshot) {
-            if (player.getGuess() == hiddenNumber) {
-                player.setPoints(player.getPoints() + 1);
-                // sync points to all
-                broadcastPlayerPoints(player);
-                // feedback
-                broadcastGameMessage(
-                        String.format("%s guessed correctly and gained a point!", player.getDisplayName()));
-                // can reset guess here
-                player.setGuess(0);
-            } else {
-                unicastGameMessage(player, "Your guess was incorrect.");
-            }
-        }
+        /*
+         * // @Deprecated guess flow: everyone gains a point for a correct guess
+         * broadcastGameMessage("Evaluating guesses... The correct number was " +
+         * hiddenNumber);
+         * List<ServerThread> snapshot = new ArrayList<>(getActivePlayers());
+         * for (ServerThread player : snapshot) {
+         * if (player.getGuess() == hiddenNumber) {
+         * player.setPoints(player.getPoints() + 1);
+         * // sync points to all
+         * broadcastPlayerPoints(player);
+         * // feedback
+         * broadcastGameMessage(
+         * String.format("%s guessed correctly and gained a point!",
+         * player.getDisplayName()));
+         * // can reset guess here
+         * player.setGuess(0);
+         * } else {
+         * unicastGameMessage(player, "Your guess was incorrect.");
+         * }
+         * }
+         */
 
         LoggerUtil.INSTANCE.info("[GameServer] onRoundEnd() end");
 
@@ -233,6 +262,8 @@ public class GameServer extends BaseGameServer {
         resetRoundTimer();
 
         currentTurnPlayerId = null;
+        broadcastGridReset();
+        clearCurrentGrid();
         phase = Phase.INACTIVE;
 
         List<ServerThread> snapshot = new ArrayList<>(getActivePlayers());
@@ -324,6 +355,7 @@ public class GameServer extends BaseGameServer {
 
     // start region for handle*() methods called by Server
 
+    @Deprecated // @Deprecated guess flow
     protected void handleGuess(ServerThread sender, String guess) {
         try {
             ValidationUtils.requireParticipating(isActivePlayer(sender));
@@ -363,6 +395,39 @@ public class GameServer extends BaseGameServer {
             // whether or not data was recorded, but I'll keep it as a separate property for
             // simplicity and flexibility. In a fuller project, deriving information is more
             // efficient
+            sender.setTurnTaken(true);
+            broadcastTurnStatus(sender.getClientId(), true);
+            onTurnEnd();
+        } catch (ValidationException e) {
+            LoggerUtil.INSTANCE.warning("[GameServer] " + e.getMessage());
+            unicastGameMessage(sender, e.getMessage());
+        }
+    }
+
+    public void handleGridTestUpdate(ServerThread sender, int x, int y, int value) {
+        try {
+            ValidationUtils.requireParticipating(isActivePlayer(sender));
+            ValidationUtils.requirePhase(phase, Phase.IN_PROGRESS);
+            ValidationUtils.requireTurnNotTaken(sender.isTurnTaken());
+            ValidationUtils.requireCurrentPlayer(currentTurnPlayerId, sender.getClientId());
+            ValidationUtils.requireNonNull(currentGrid, "Grid is not initialized yet.");
+            ValidationUtils.requireInBounds(x, y, currentGrid.getWidth(), currentGrid.getHeight());
+            ValidationUtils.requireValidCellValue(value);
+
+            currentGrid.applyModifier(value, x, y);
+            LoggerUtil.INSTANCE.info("[GameServer] Grid after update:\n" + currentGrid.toGridString());
+            broadcastAffectedGridCells(x, y);
+            // determine score based on odds; add and broadcast
+            int oddCount = currentGrid.countOdd(x, y);
+            int pointsGained = oddCount; // example scoring: 1 point per odd cell
+            if(pointsGained > 0) {
+                sender.setPoints(sender.getPoints() + pointsGained);
+                broadcastPlayerPoints(sender);
+            }
+            unicastGameMessage(sender,
+                    String.format("Grid update accepted at (%d,%d) with value %d. +%d point(s).", x, y, value,
+                            pointsGained));
+
             sender.setTurnTaken(true);
             broadcastTurnStatus(sender.getClientId(), true);
             onTurnEnd();
@@ -482,6 +547,10 @@ public class GameServer extends BaseGameServer {
         }
         unicastCurrentPhase(joiner);
         unicastCurrentPlayer(joiner);
+        if (currentGrid != null) {
+            unicastGridSeed(joiner);
+            unicastGridState(joiner);
+        }
         List<ServerThread> snapshot = new ArrayList<>(getActivePlayers());
         for (ServerThread player : snapshot) {
             if (player.getClientId() == joiner.getClientId()) {
@@ -535,6 +604,88 @@ public class GameServer extends BaseGameServer {
         }
         final String formatted = GAME_TAG + message;
         Server.INSTANCE.unicast(target, serverThread -> serverThread.sendMessage(formatted));
+    }
+
+    private void broadcastGridSeed() {
+        if (currentGrid == null) {
+            LoggerUtil.INSTANCE.warning("[GameServer] Tried to broadcast grid seed with no active grid.");
+            return;
+        }
+        final int width = currentGrid.getWidth();
+        final int height = currentGrid.getHeight();
+        final long seed = currentGridSeed;
+        Server.INSTANCE.sendOrDisconnect(serverThread -> serverThread.sendGridSeed(seed, width, height));
+    }
+
+    private void unicastGridSeed(ServerThread target) {
+        if (currentGrid == null) {
+            LoggerUtil.INSTANCE.warning("[GameServer] Tried to unicast grid seed with no active grid.");
+            return;
+        }
+        Server.INSTANCE.unicast(target,
+                serverThread -> serverThread.sendGridSeed(currentGridSeed, currentGrid.getWidth(),
+                        currentGrid.getHeight()));
+    }
+
+    private void broadcastGridReset() {
+        LoggerUtil.INSTANCE.info("[GameServer] Broadcasting grid reset trigger.");
+        Server.INSTANCE.sendOrDisconnect(serverThread -> serverThread.sendGridSeed(0L, 0, 0));
+    }
+
+    private void broadcastGridCell(int x, int y, int value) {
+        Server.INSTANCE.sendOrDisconnect(serverThread -> serverThread.sendGridCell(x, y, value));
+    }
+
+    private void unicastGridCell(ServerThread target, int x, int y, int value) {
+        Server.INSTANCE.unicast(target, serverThread -> serverThread.sendGridCell(x, y, value));
+    }
+
+    private void unicastGridState(ServerThread target) {
+        if (currentGrid == null) {
+            LoggerUtil.INSTANCE.warning("[GameServer] Tried to unicast grid state with no active grid.");
+            return;
+        }
+        for (int x = 0; x < currentGrid.getWidth(); x++) {
+            for (int y = 0; y < currentGrid.getHeight(); y++) {
+                unicastGridCell(target, x, y, currentGrid.getValue(x, y));
+            }
+        }
+    }
+
+    private void broadcastAffectedGridCells(int x, int y) {
+        if (currentGrid == null) {
+            return;
+        }
+        int w = currentGrid.getWidth();
+        int h = currentGrid.getHeight();
+        // center
+        if (ValidationUtils.isInBounds(x, y, w, h)) {
+            broadcastGridCell(x, y, currentGrid.getValue(x, y));
+        }
+        // top
+        if (ValidationUtils.isInBounds(x, y - 1, w, h)) {
+            broadcastGridCell(x, y - 1, currentGrid.getValue(x, y - 1));
+        }
+        // bottom
+        if (ValidationUtils.isInBounds(x, y + 1, w, h)) {
+            broadcastGridCell(x, y + 1, currentGrid.getValue(x, y + 1));
+        }
+        // left
+        if (ValidationUtils.isInBounds(x - 1, y, w, h)) {
+            broadcastGridCell(x - 1, y, currentGrid.getValue(x - 1, y));
+        }
+        // right
+        if (ValidationUtils.isInBounds(x + 1, y, w, h)) {
+            broadcastGridCell(x + 1, y, currentGrid.getValue(x + 1, y));
+        }
+    }
+
+    private void clearCurrentGrid() {
+        if (currentGrid != null) {
+            currentGrid.clear();
+            currentGrid = null;
+        }
+        currentGridSeed = 0L;
     }
 
     // end region for helper methods to send data to clients

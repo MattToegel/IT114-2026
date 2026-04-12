@@ -5,6 +5,7 @@ public class User {
     private String clientName;
     private boolean ready;
     private boolean turnTaken;
+    @Deprecated // @Deprecated guess flow
     private int guess = 0;// example user data
     private int points = 0;
 
@@ -40,6 +41,7 @@ public class User {
     /**
      * @return the guess
      */
+    @Deprecated // @Deprecated guess flow
     public int getGuess() {
         return guess;
     }
@@ -47,6 +49,7 @@ public class User {
     /**
      * @param guess the guess to set
      */
+    @Deprecated // @Deprecated guess flow
     public void setGuess(int guess) {
         this.guess = guess;
     }

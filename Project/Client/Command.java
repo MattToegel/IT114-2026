@@ -14,6 +14,8 @@ public enum Command {
     TURN("/turn"),// @Deprecated
     VALIDATE_CLIENT("/togglecv"), // toggle client validation (for testing server-side validations)
     GUESS("/guess"), // example game action command
+    GRID("/grid"), // print local grid from this client's perspective
+    GRID_TEST("/gridtest"), // temporary: send x y value to server grid test handler
     ;
 
     private final String trigger;

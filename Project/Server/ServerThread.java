@@ -7,6 +7,8 @@ import java.util.function.Consumer;
 import Project.Common.ConnectionPayload;
 import Project.Common.Constants;
 import Project.Common.BoolPayload;
+import Project.Common.GridCellPayload;
+import Project.Common.GridSeedPayload;
 import Project.Common.Phase;
 import Project.Common.PointsPayload;
 import Project.Common.Payload;
@@ -71,7 +73,12 @@ public class ServerThread extends BaseServerThread {
                 processTurn(incoming);
                 break;
             case GUESS:
+                // @Deprecated guess flow
                 processGuess(incoming);
+                break;
+            case GRID_CELL_SYNC:
+                // @Deprecated temporary: accepting client->server GRID_CELL_SYNC for /gridtest
+                processGridTestUpdate(incoming);
                 break;
             default:
                 info("Received unsupported payload type: " + incoming.getPayloadType());
@@ -80,9 +87,20 @@ public class ServerThread extends BaseServerThread {
 
     // Region used to hand off data to Server methods for processing
     // Start region for process*() methods ===================================
+    @Deprecated // @Deprecated guess flow
     private void processGuess(Payload incoming) {
         info("Processing guess payload");
         Server.INSTANCE.handleGuess(this, incoming.getMessage());
+    }
+
+    private void processGridTestUpdate(Payload incoming) {
+        info("Processing grid test update payload");
+        if (!(incoming instanceof GridCellPayload)) {
+            info("Received invalid payload for grid test update: " + incoming);
+            return;
+        }
+        GridCellPayload gcp = (GridCellPayload) incoming;
+        Server.INSTANCE.handleGridTestUpdate(this, gcp.getX(), gcp.getY(), gcp.getValue());
     }
 
     private void processTurn(Payload incoming) {
@@ -134,6 +152,24 @@ public class ServerThread extends BaseServerThread {
         return sendToClient(payload);
     }
 
+    protected boolean sendGridSeed(long seed, int width, int height) {
+        GridSeedPayload payload = new GridSeedPayload();
+        payload.setPayloadType(PayloadType.GRID_SEED_SYNC);
+        payload.setSeed(seed);
+        payload.setWidth(width);
+        payload.setHeight(height);
+        return sendToClient(payload);
+    }
+
+    protected boolean sendGridCell(int x, int y, int value) {
+        GridCellPayload payload = new GridCellPayload();
+        payload.setPayloadType(PayloadType.GRID_CELL_SYNC);
+        payload.setX(x);
+        payload.setY(y);
+        payload.setValue(value);
+        return sendToClient(payload);
+    }
+
     protected boolean sendPlayerPoints(long clientId, int points) {
         PointsPayload payload = new PointsPayload();
         payload.setPayloadType(PayloadType.POINTS);
@@ -142,6 +178,7 @@ public class ServerThread extends BaseServerThread {
         return sendToClient(payload);
     }
 
+    @Deprecated // @Deprecated guess flow
     protected boolean sendGuessConfirmation(int guess) {
         // in this example the guess is a number, but since I want to keep the code
         // changes minimal, I'll leverage PointsPayload to pass the confirmation back

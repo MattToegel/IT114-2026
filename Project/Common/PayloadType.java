@@ -21,4 +21,6 @@ public enum PayloadType {
     POINTS, // server syncs a user's points
     GUESS, // Used by client to send guess and server to confirm guess was received
     CURRENT_TURN, // server syncs which client's turn it currently is
+    GRID_SEED_SYNC, // server syncs current grid seed and dimensions
+    GRID_CELL_SYNC, // server syncs a single grid cell value
 }

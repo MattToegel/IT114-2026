@@ -82,11 +82,13 @@ public abstract class BaseServerThread extends Thread {
         this.user.setTurnTaken(turnTaken);
     }
 
-    // exposure of example user data
+    // @Deprecated guess flow exposure of example user data
+    @Deprecated
     public int getGuess() {
         return this.user.getGuess();
     }
 
+    @Deprecated
     public void setGuess(int guess) {
         this.user.setGuess(guess);
     }
