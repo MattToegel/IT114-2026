@@ -14,6 +14,10 @@ import java.util.regex.Pattern;
 import M4.MCCS.Part1.Constants;
 import Project.Common.ConnectionPayload;
 import Project.Common.BoolPayload;
+import Project.Common.CardActionPayload;
+import Project.Common.Card;
+import Project.Common.CardCatalogPayload;
+import Project.Common.CardHandPayload;
 import Project.Common.Grid;
 import Project.Common.GridCellPayload;
 import Project.Common.GridSeedPayload;
@@ -59,6 +63,9 @@ public enum Client {
     private volatile boolean isLocalValidationEnabled = true;
     private volatile Grid localGrid;
     private volatile long localGridSeed = 0L;
+    // Client-side card catalog: id -> Card data.
+    // This lets the UI show card values while the server still remains authoritative.
+    private final ConcurrentHashMap<Integer, Card> cardCatalog = new ConcurrentHashMap<>();
 
     private Client() {
         LoggerUtil.INSTANCE.info("Client Created");
@@ -193,6 +200,14 @@ public enum Client {
             case GRID:
                 printLocalGrid();
                 return true;
+            case CARD:
+                String cardArgs = text.replaceFirst("/card", "").trim();
+                sendCardAction(cardArgs);
+                return true;
+            case HAND:
+                printLocalHand();
+                return true;
+            // @Deprecated grid test compatibility flow
             case GRID_TEST:
                 String gridTestArgs = text.replaceFirst("/gridtest", "").trim();
                 sendGridTestUpdate(gridTestArgs);
@@ -203,6 +218,26 @@ public enum Client {
     }
 
     // start region for misc
+    private String formatHandForDisplay() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("[");
+        for (int i = 0; i < myUser.getCardIds().size(); i++) {
+            int cardId = myUser.getCardIds().get(i);
+            Card card = cardCatalog.get(cardId);
+            int mod = card == null ? 0 : card.getMod();
+            sb.append(cardId).append("(").append(mod >= 0 ? "+" : "").append(mod).append(")");
+            if (i < myUser.getCardIds().size() - 1) {
+                sb.append(", ");
+            }
+        }
+        sb.append("]");
+        return sb.toString();
+    }
+
+    private void printLocalHand() {
+        // Client-only inspection command for debugging/UI checks.
+        LoggerUtil.INSTANCE.info(TextFX.colorize("[Game] Your hand: " + formatHandForDisplay(), Color.GREEN));
+    }
     private void printLocalGrid() {
         if (localGrid == null || localGrid.getWidth() <= 0 || localGrid.getHeight() <= 0) {
             LoggerUtil.INSTANCE.info(TextFX.colorize("[Game] Grid is not initialized yet.", Color.YELLOW));
@@ -250,6 +285,50 @@ public enum Client {
         sendToServer(payload);
     }
 
+    private void sendCardAction(String args) throws IOException {
+        String[] parts = args == null ? new String[0] : args.trim().split("\\s+");
+        if (parts.length != 3) {
+            LoggerUtil.INSTANCE.warning("Usage: /card <cardId> <x> <y>");
+            return;
+        }
+
+        int cardId;
+        int x;
+        int y;
+        try {
+            cardId = Integer.parseInt(parts[0]);
+            x = Integer.parseInt(parts[1]);
+            y = Integer.parseInt(parts[2]);
+        } catch (NumberFormatException e) {
+            LoggerUtil.INSTANCE.warning("Usage: /card <cardId> <x> <y>");
+            return;
+        }
+
+        if (isLocalValidationEnabled) {
+            try {
+                ValidationUtils.requirePhase(currentGamePhase, Phase.IN_PROGRESS);
+                ValidationUtils.requireParticipating(myUser.isReady());
+                ValidationUtils.requireTurnNotTaken(myUser.isTurnTaken());
+                ValidationUtils.requireValidCardId(cardId);
+                ValidationUtils.requireCardInHand(myUser.getCardIds(), cardId);
+                if (localGrid != null) {
+                    ValidationUtils.requireInBounds(x, y, localGrid.getWidth(), localGrid.getHeight());
+                }
+            } catch (ValidationException e) {
+                LoggerUtil.INSTANCE.warning(TextFX.colorize(e.getMessage(), Color.YELLOW));
+                return;
+            }
+        }
+
+        CardActionPayload payload = new CardActionPayload();
+        payload.setPayloadType(PayloadType.CARD_ACTION);
+        payload.setCardId(cardId);
+        payload.setX(x);
+        payload.setY(y);
+        sendToServer(payload);
+    }
+
+    @Deprecated // @Deprecated grid test compatibility flow
     private void sendGridTestUpdate(String args) throws IOException {
         String[] parts = args == null ? new String[0] : args.trim().split("\\s+");
         if (parts.length != 3) {
@@ -494,12 +573,55 @@ public enum Client {
             case GRID_CELL_SYNC:
                 processGridCellSync(payload);
                 break;
+            case CARD_HAND_SYNC:
+                processCardHandSync(payload);
+                break;
+            case CARD_CATALOG_SYNC:
+                processCardCatalogSync(payload);
+                break;
             default:
                 LoggerUtil.INSTANCE.warning("Received unhandled payload type: " + payload.getPayloadType());
         }
     }
 
     // Start region for process*() methods ===================================
+    private void processCardHandSync(Payload payload) {
+        if (!(payload instanceof CardHandPayload)) {
+            LoggerUtil.INSTANCE.warning("Expected CardHandPayload for CARD_HAND_SYNC, got: " + payload.getClass());
+            return;
+        }
+        CardHandPayload chp = (CardHandPayload) payload;
+        if (chp.getClientId() == Constants.DEFAULT_CLIENT_ID) {
+            myUser.clearCardIds();
+            LoggerUtil.INSTANCE.info(TextFX.colorize("[Game] Hand reset.", Color.YELLOW));
+            return;
+        }
+        if (chp.getClientId() != myUser.getClientId()) {
+            return;
+        }
+
+        myUser.setCardIds(chp.getCardIds());
+        LoggerUtil.INSTANCE.info(TextFX.colorize("[Game] Your hand: " + formatHandForDisplay(), Color.GREEN));
+    }
+
+    private void processCardCatalogSync(Payload payload) {
+        if (!(payload instanceof CardCatalogPayload)) {
+            LoggerUtil.INSTANCE
+                    .warning("Expected CardCatalogPayload for CARD_CATALOG_SYNC, got: " + payload.getClass());
+            return;
+        }
+
+        CardCatalogPayload ccp = (CardCatalogPayload) payload;
+        // Replace local catalog with server-synced data.
+        // Beginners note: this is a "cache" for display only. The server still validates
+        // actions.
+        cardCatalog.clear();
+        for (Card card : ccp.getCards()) {
+            cardCatalog.put(card.getId(), card);
+        }
+        LoggerUtil.INSTANCE.info(TextFX.colorize("[Game] Card catalog synced: " + cardCatalog.size() + " cards.",
+                Color.GREEN));
+    }
     private void processGridSeedSync(Payload payload) {
         if (!(payload instanceof GridSeedPayload)) {
             LoggerUtil.INSTANCE.warning("Expected GridSeedPayload for GRID_SEED_SYNC, got: " + payload.getClass());
@@ -640,6 +762,7 @@ public enum Client {
             // knownUsers.forEach((key, user) -> user.setReady(false));
             // option 2: reset all game-related status (cheaper)
             knownUsers.forEach((key, user) -> user.resetGameState());
+            cardCatalog.clear();
             LoggerUtil.INSTANCE.info(TextFX.colorize("All users' ready status reset", Color.YELLOW));
             return;
         }

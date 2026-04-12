@@ -1,5 +1,8 @@
 package Project.Common;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class User {
     private long clientId = Constants.DEFAULT_CLIENT_ID;
     private String clientName;
@@ -8,6 +11,7 @@ public class User {
     @Deprecated // @Deprecated guess flow
     private int guess = 0;// example user data
     private int points = 0;
+    private final List<Integer> cardIds = new ArrayList<>();
 
     public User() {
     }
@@ -95,11 +99,39 @@ public class User {
         this.turnTaken = turnTaken;
     }
 
+    public List<Integer> getCardIds() {
+        return cardIds;
+    }
+
+    public boolean hasCardId(int cardId) {
+        return cardIds.contains(cardId);
+    }
+
+    public void addCardId(int cardId) {
+        cardIds.add(cardId);
+    }
+
+    public void removeCardId(int cardId) {
+        cardIds.remove(Integer.valueOf(cardId));
+    }
+
+    public void setCardIds(List<Integer> cardIds) {
+        this.cardIds.clear();
+        if (cardIds != null) {
+            this.cardIds.addAll(cardIds);
+        }
+    }
+
+    public void clearCardIds() {
+        cardIds.clear();
+    }
+
     public void resetGameState() {
         this.ready = false;
         this.turnTaken = false;
         this.guess = 0; // example user data
         this.points = 0;
+        this.cardIds.clear();
     }
 
     public void reset() {

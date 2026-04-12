@@ -1,5 +1,7 @@
 package Project.Common;
 
+import java.util.List;
+
 import Project.Exceptions.AlreadyReadyException;
 import Project.Exceptions.BlankValidationException;
 import Project.Exceptions.ConditionValidationException;
@@ -25,6 +27,8 @@ public final class ValidationUtils {
     private static final String DEFAULT_TURN_OPTION_MESSAGE = "That turn option is not available.";
     private static final String DEFAULT_OUT_OF_BOUNDS_MESSAGE = "That coordinate is out of bounds.";
     private static final String DEFAULT_INVALID_CELL_VALUE_MESSAGE = "Cell value must be between 0 and 9.";
+    private static final String DEFAULT_INVALID_CARD_ID_MESSAGE = "Please choose a valid card id.";
+    private static final String DEFAULT_CARD_NOT_IN_HAND_MESSAGE = "That card is not in your hand.";
 
     private ValidationUtils() {
     }
@@ -49,6 +53,10 @@ public final class ValidationUtils {
         return value >= 0 && value <= 9;
     }
 
+    public static boolean isValidCardId(int cardId) {
+        return cardId > 0;
+    }
+
     public static void requireInBounds(int x, int y, int width, int height)
             throws ConditionValidationException {
         requireInBounds(x, y, width, height, DEFAULT_OUT_OF_BOUNDS_MESSAGE);
@@ -69,6 +77,30 @@ public final class ValidationUtils {
     public static void requireValidCellValue(int value, String errorMessage)
             throws ConditionValidationException {
         if (!isValidCellValue(value)) {
+            throw new ConditionValidationException(errorMessage);
+        }
+    }
+
+    public static void requireValidCardId(int cardId)
+            throws ConditionValidationException {
+        requireValidCardId(cardId, DEFAULT_INVALID_CARD_ID_MESSAGE);
+    }
+
+    public static void requireValidCardId(int cardId, String errorMessage)
+            throws ConditionValidationException {
+        if (!isValidCardId(cardId)) {
+            throw new ConditionValidationException(errorMessage);
+        }
+    }
+
+    public static void requireCardInHand(List<Integer> cardIds, int cardId)
+            throws ConditionValidationException {
+        requireCardInHand(cardIds, cardId, DEFAULT_CARD_NOT_IN_HAND_MESSAGE);
+    }
+
+    public static void requireCardInHand(List<Integer> cardIds, int cardId, String errorMessage)
+            throws ConditionValidationException {
+        if (cardIds == null || !cardIds.contains(cardId)) {
             throw new ConditionValidationException(errorMessage);
         }
     }

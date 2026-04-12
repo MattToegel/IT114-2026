@@ -23,4 +23,7 @@ public enum PayloadType {
     CURRENT_TURN, // server syncs which client's turn it currently is
     GRID_SEED_SYNC, // server syncs current grid seed and dimensions
     GRID_CELL_SYNC, // server syncs a single grid cell value
+    CARD_ACTION, // client sends card id + target coordinates
+    CARD_HAND_SYNC, // server syncs only the receiving client's hand card ids
+    CARD_CATALOG_SYNC, // server syncs card definitions (id, mod) for client-side display
 }

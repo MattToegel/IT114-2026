@@ -11,11 +11,13 @@ public enum Command {
     REVERSE("/reverse"),
     SET_NAME("/name"),
     READY("/ready"),
-    TURN("/turn"),// @Deprecated
+    TURN("/turn"), // @Deprecated
     VALIDATE_CLIENT("/togglecv"), // toggle client validation (for testing server-side validations)
     GUESS("/guess"), // example game action command
+    GRID_TEST("/gridtest"), // @Deprecated grid test compatibility command
     GRID("/grid"), // print local grid from this client's perspective
-    GRID_TEST("/gridtest"), // temporary: send x y value to server grid test handler
+    CARD("/card"), // play a card by id at x,y
+    HAND("/hand"), // print your local hand knowledge (id + value)
     ;
 
     private final String trigger;

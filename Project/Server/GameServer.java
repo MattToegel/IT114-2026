@@ -4,8 +4,10 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Random;
+import java.util.stream.Collectors;
 
-import M4.MCCS.Part1.Constants;
+import Project.Common.Card;
+import Project.Common.Constants;
 import Project.Common.Grid;
 import Project.Common.LoggerUtil;
 import Project.Common.Phase;
@@ -29,6 +31,7 @@ public class GameServer extends BaseGameServer {
     private static final String GAME_TAG = "[Game] ";
     private static final int GRID_WIDTH = 5;
     private static final int GRID_HEIGHT = 5;
+    private static final int HAND_SIZE = 3;
 
     private volatile Phase phase = Phase.INACTIVE;
     private volatile TimedEvent readyTimer;
@@ -41,6 +44,8 @@ public class GameServer extends BaseGameServer {
     private int hiddenNumber = 0;
     private volatile Grid currentGrid;
     private volatile long currentGridSeed = 0L;
+    private final Random deckRng = new Random();
+    private volatile Deck currentDeck;
 
     // start region for lifecycle hook implementations
     @Override
@@ -81,6 +86,7 @@ public class GameServer extends BaseGameServer {
         }
 
         LoggerUtil.INSTANCE.info("[GameServer] Player left: " + client.getDisplayName());
+        client.clearCardIds();
         if (getActivePlayerCount() == 0) {
             resetReadyTimer();
             onSessionEnd();
@@ -109,6 +115,11 @@ public class GameServer extends BaseGameServer {
         currentTurnPlayerId = null;
 
         clearCurrentGrid();
+        for (ServerThread player : getActivePlayers()) {
+            player.clearCardIds();
+        }
+        currentDeck = new Deck();
+        currentDeck.loadCardsFromFile();
 
         currentGridSeed = System.currentTimeMillis();
         currentGrid = new Grid();
@@ -116,6 +127,7 @@ public class GameServer extends BaseGameServer {
         currentGrid.setToRandom(currentGridSeed);
         LoggerUtil.INSTANCE.info("[GameServer] Current grid:\n" + currentGrid.toGridString());
 
+        broadcastCardCatalog();
         broadcastGridSeed();
 
         broadcastGameMessage("Session started.");
@@ -139,7 +151,7 @@ public class GameServer extends BaseGameServer {
         broadcastGameMessage("Round " + roundNumber + " started. Each player gets one grid action.");
         // example round setup
         hiddenNumber = new Random().nextInt(10) + 1;
-        broadcastGameMessage("Use /gridtest <x> <y> <value 0-9> on your turn.");
+        broadcastGameMessage("Use /card <cardId> <x> <y> on your turn.");
         LoggerUtil.INSTANCE.info("[GameServer] onRoundStart() end");
         onTurnStart(); // this example users onTurnStart() for individual turn pacing
     }
@@ -171,10 +183,12 @@ public class GameServer extends BaseGameServer {
         }
 
         currentTurnPlayerId = currentPlayer.getClientId();
+        drawUpToHandSize(currentPlayer);
+        unicastHand(currentPlayer);
         startTurnTimer();
         broadcastCurrentTurn(); // Message is generated on the client-side based on the clientId
         broadcastGameMessage("Turn started for " + currentPlayer.getDisplayName()
-                + ". Use /gridtest <x> <y> <value 0-9> within " + TURN_SECONDS + "s.");
+                + ". Use /card <cardId> <x> <y> within " + TURN_SECONDS + "s.");
         LoggerUtil.INSTANCE.info("[GameServer] onTurnStart() end");
     }
 
@@ -267,13 +281,29 @@ public class GameServer extends BaseGameServer {
         phase = Phase.INACTIVE;
 
         List<ServerThread> snapshot = new ArrayList<>(getActivePlayers());
-        // find user with highest score; they're the winner (uses stream api)
-        snapshot.stream().max((p1, p2) -> Integer.compare(p1.getPoints(), p2.getPoints())).ifPresentOrElse(winner -> {
-            broadcastGameMessage(String.format("Session ended: %s wins with %d points!", winner.getDisplayName(),
-                    winner.getPoints()));
-        }, () -> {
+        if (snapshot.isEmpty()) {
+            // this shouldn't be possible
             broadcastGameMessage("Session ended with no winner.");
-        });
+        } else {
+            int topScore = snapshot.stream().mapToInt(ServerThread::getPoints).max().orElse(0);
+            List<ServerThread> winners = snapshot.stream()
+                    .filter(player -> player.getPoints() == topScore)
+                    .toList();
+
+            if (winners.size() == 1) {
+                ServerThread winner = winners.get(0);
+                broadcastGameMessage(String.format("Session ended: %s wins with %d points!",
+                        winner.getDisplayName(),
+                        winner.getPoints()));
+            } else {
+                String winnerNames = winners.stream()
+                        .map(ServerThread::getDisplayName)
+                        .collect(Collectors.joining(", "));
+                broadcastGameMessage(String.format("Session ended in a tie at %d points: %s",
+                        topScore,
+                        winnerNames));
+            }
+        }
 
         // reset player data and sync changes to clients before clearing active players,
         // so that clients have a chance to update any relevant UI (like ready status)
@@ -404,29 +434,50 @@ public class GameServer extends BaseGameServer {
         }
     }
 
-    public void handleGridTestUpdate(ServerThread sender, int x, int y, int value) {
+    public void handleCardAction(ServerThread sender, int cardId, int x, int y) {
         try {
             ValidationUtils.requireParticipating(isActivePlayer(sender));
             ValidationUtils.requirePhase(phase, Phase.IN_PROGRESS);
             ValidationUtils.requireTurnNotTaken(sender.isTurnTaken());
             ValidationUtils.requireCurrentPlayer(currentTurnPlayerId, sender.getClientId());
             ValidationUtils.requireNonNull(currentGrid, "Grid is not initialized yet.");
+            ValidationUtils.requireValidCardId(cardId);
             ValidationUtils.requireInBounds(x, y, currentGrid.getWidth(), currentGrid.getHeight());
-            ValidationUtils.requireValidCellValue(value);
+            ValidationUtils.requireNonNull(currentDeck, "Deck is not initialized yet.");
+
+            List<Integer> hand = sender.getCardIds();
+            ValidationUtils.requireCardInHand(hand, cardId);
+            Card selectedCard = currentDeck.getById(cardId);
+            ValidationUtils.requireNonNull(selectedCard, "Card data was not found in the deck.");
+            int value = selectedCard.getMod();
 
             currentGrid.applyModifier(value, x, y);
             LoggerUtil.INSTANCE.info("[GameServer] Grid after update:\n" + currentGrid.toGridString());
             broadcastAffectedGridCells(x, y);
+
+            broadcastGameMessage(buildPlusPatternMessage(x, y));
+
             // determine score based on odds; add and broadcast
             int oddCount = currentGrid.countOdd(x, y);
             int pointsGained = oddCount; // example scoring: 1 point per odd cell
-            if(pointsGained > 0) {
+            if (pointsGained > 0) {
                 sender.setPoints(sender.getPoints() + pointsGained);
                 broadcastPlayerPoints(sender);
             }
-            unicastGameMessage(sender,
-                    String.format("Grid update accepted at (%d,%d) with value %d. +%d point(s).", x, y, value,
-                            pointsGained));
+
+            sender.removeCardId(cardId);
+            unicastHand(sender);
+            String actionSummary = String.format(
+                    "%s played card %d (%+d) at (%d,%d). Plus-sign odd total: %d => +%d point(s).",
+                    sender.getDisplayName(),
+                    cardId,
+                    value,
+                    x,
+                    y,
+                    oddCount,
+                    pointsGained);
+            broadcastGameMessage(actionSummary);
+            LoggerUtil.INSTANCE.info("[GameServer] " + actionSummary);
 
             sender.setTurnTaken(true);
             broadcastTurnStatus(sender.getClientId(), true);
@@ -435,6 +486,12 @@ public class GameServer extends BaseGameServer {
             LoggerUtil.INSTANCE.warning("[GameServer] " + e.getMessage());
             unicastGameMessage(sender, e.getMessage());
         }
+    }
+
+    @Deprecated // @Deprecated grid test compatibility flow
+    public void handleGridTestUpdate(ServerThread sender, int x, int y, int value) {
+        // Compatibility path for older /gridtest payloads.
+        handleCardAction(sender, value, x, y);
     }
 
     /**
@@ -497,6 +554,28 @@ public class GameServer extends BaseGameServer {
 
     // start region for helper methods to send data to clients
 
+
+    private void unicastHand(ServerThread target) {
+        List<Integer> snapshot = new ArrayList<>(target.getCardIds());
+        Server.INSTANCE.unicast(target, serverThread -> serverThread.sendCardHand(target.getClientId(), snapshot));
+    }
+
+    private void broadcastCardCatalog() {
+        if (currentDeck == null) {
+            return;
+        }
+        List<Card> catalog = currentDeck.getCatalogSnapshot();
+        Server.INSTANCE.sendOrDisconnect(serverThread -> serverThread.sendCardCatalog(catalog));
+    }
+
+    private void unicastCardCatalog(ServerThread target) {
+        if (currentDeck == null) {
+            return;
+        }
+        List<Card> catalog = currentDeck.getCatalogSnapshot();
+        Server.INSTANCE.unicast(target, serverThread -> serverThread.sendCardCatalog(catalog));
+    }
+
     /** Sends the current turn owner to a single client when applicable. */
     private void unicastCurrentPlayer(ServerThread target) {
         if (target == null || currentTurnPlayerId == null) {
@@ -547,6 +626,12 @@ public class GameServer extends BaseGameServer {
         }
         unicastCurrentPhase(joiner);
         unicastCurrentPlayer(joiner);
+        if (currentDeck != null) {
+            unicastCardCatalog(joiner);
+        }
+        if (isActivePlayer(joiner)) {
+            unicastHand(joiner);
+        }
         if (currentGrid != null) {
             unicastGridSeed(joiner);
             unicastGridState(joiner);
@@ -689,4 +774,51 @@ public class GameServer extends BaseGameServer {
     }
 
     // end region for helper methods to send data to clients
+
+    // start region misc utility methods
+    
+    private String buildPlusPatternMessage(int x, int y) {
+        if (currentGrid == null) {
+            return "Affected plus pattern: [grid unavailable]";
+        }
+        int w = currentGrid.getWidth();
+        int h = currentGrid.getHeight();
+
+        String top = getPatternCellValue(x, y - 1, w, h);
+        String left = getPatternCellValue(x - 1, y, w, h);
+        String center = getPatternCellValue(x, y, w, h);
+        String right = getPatternCellValue(x + 1, y, w, h);
+        String bottom = getPatternCellValue(x, y + 1, w, h);
+
+        return String.format(
+                "Affected plus pattern at (%d,%d):\n[ ][%s][ ]\n[%s][%s][%s]\n[ ][%s][ ]",
+                x,
+                y,
+                top,
+                left,
+                center,
+                right,
+                bottom);
+    }
+
+    private String getPatternCellValue(int x, int y, int w, int h) {
+        if (!ValidationUtils.isInBounds(x, y, w, h)) {
+            return " ";
+        }
+        return String.valueOf(currentGrid.getValue(x, y));
+    }
+
+    private void drawUpToHandSize(ServerThread player) {
+        if (currentDeck == null) {
+            return;
+        }
+        while (player.getCardIds().size() < HAND_SIZE) {
+            int nextCardId = currentDeck.drawCardId(deckRng);
+            if (nextCardId <= 0) {
+                break;
+            }
+            player.addCardId(nextCardId);
+        }
+    }
+    // end region misc utility methods
 }

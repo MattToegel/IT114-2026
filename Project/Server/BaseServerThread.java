@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.Socket;
+import java.util.List;
 
 import Project.Common.Payload;
 import Project.Common.TextFX;
@@ -99,6 +100,26 @@ public abstract class BaseServerThread extends Thread {
 
     public void setPoints(int points) {
         this.user.setPoints(points);
+    }
+
+    public List<Integer> getCardIds() {
+        return this.user.getCardIds();
+    }
+
+    public void setCardIds(List<Integer> cardIds) {
+        this.user.setCardIds(cardIds);
+    }
+
+    public void addCardId(int cardId) {
+        this.user.addCardId(cardId);
+    }
+
+    public void removeCardId(int cardId) {
+        this.user.removeCardId(cardId);
+    }
+
+    public void clearCardIds() {
+        this.user.clearCardIds();
     }
 
     /**

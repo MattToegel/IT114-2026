@@ -93,6 +93,19 @@ public enum Server {
         }
     }
 
+    
+    protected synchronized void handleCardAction(ServerThread sender, int cardId, int x, int y) {
+        if (!isGameServerActive()) {
+            return;
+        }
+        try {
+            gameServer.handleCardAction(sender, cardId, x, y);
+        } catch (Exception e) {
+            LoggerUtil.INSTANCE.severe("Game server handleCardAction failed", e);
+        }
+    }
+
+    @Deprecated // @Deprecated grid test compatibility flow
     protected synchronized void handleGridTestUpdate(ServerThread sender, int x, int y, int value) {
         if (!isGameServerActive()) {
             return;

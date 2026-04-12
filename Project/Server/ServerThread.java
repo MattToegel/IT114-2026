@@ -2,8 +2,13 @@ package Project.Server;
 
 import java.net.Socket;
 import java.util.Objects;
+import java.util.List;
 import java.util.function.Consumer;
 
+import Project.Common.CardActionPayload;
+import Project.Common.Card;
+import Project.Common.CardCatalogPayload;
+import Project.Common.CardHandPayload;
 import Project.Common.ConnectionPayload;
 import Project.Common.Constants;
 import Project.Common.BoolPayload;
@@ -77,8 +82,11 @@ public class ServerThread extends BaseServerThread {
                 processGuess(incoming);
                 break;
             case GRID_CELL_SYNC:
-                // @Deprecated temporary: accepting client->server GRID_CELL_SYNC for /gridtest
+                // @Deprecated grid test compatibility flow
                 processGridTestUpdate(incoming);
+                break;
+            case CARD_ACTION:
+                processCardAction(incoming);
                 break;
             default:
                 info("Received unsupported payload type: " + incoming.getPayloadType());
@@ -93,6 +101,17 @@ public class ServerThread extends BaseServerThread {
         Server.INSTANCE.handleGuess(this, incoming.getMessage());
     }
 
+    private void processCardAction(Payload incoming) {
+        info("Processing card action payload");
+        if (!(incoming instanceof CardActionPayload)) {
+            info("Received invalid payload for card action: " + incoming);
+            return;
+        }
+        CardActionPayload cap = (CardActionPayload) incoming;
+        Server.INSTANCE.handleCardAction(this, cap.getCardId(), cap.getX(), cap.getY());
+    }
+
+    @Deprecated // @Deprecated grid test compatibility flow
     private void processGridTestUpdate(Payload incoming) {
         info("Processing grid test update payload");
         if (!(incoming instanceof GridCellPayload)) {
@@ -145,6 +164,20 @@ public class ServerThread extends BaseServerThread {
     // End region for process*() methods ===================================
 
     // Start region for send*() methods ===================================
+    protected boolean sendCardHand(long clientId, List<Integer> cardIds) {
+        CardHandPayload payload = new CardHandPayload();
+        payload.setPayloadType(PayloadType.CARD_HAND_SYNC);
+        payload.setClientId(clientId);
+        payload.setCardIds(cardIds);
+        return sendToClient(payload);
+    }
+
+    protected boolean sendCardCatalog(List<Card> cards) {
+        CardCatalogPayload payload = new CardCatalogPayload();
+        payload.setPayloadType(PayloadType.CARD_CATALOG_SYNC);
+        payload.setCards(cards);
+        return sendToClient(payload);
+    }
     protected boolean sendCurrentTurn(long clientId) {
         Payload payload = new Payload();
         payload.setPayloadType(PayloadType.CURRENT_TURN);
