@@ -629,6 +629,9 @@ public class GameServer extends BaseGameServer {
         if (currentDeck != null) {
             unicastCardCatalog(joiner);
         }
+        // this scenario is likely impossible
+        // but it's an example if we were to allow rejoining
+        // if we didn't reset their data on leaving
         if (isActivePlayer(joiner)) {
             unicastHand(joiner);
         }
