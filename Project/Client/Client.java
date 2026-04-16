@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import M4.MCCS.Part1.Constants;
+import Project.Common.Constants;
 import Project.Common.ConnectionPayload;
 import Project.Common.BoolPayload;
 import Project.Common.Grid;
@@ -506,15 +506,16 @@ public enum Client {
             return;
         }
         GridSeedPayload gsp = (GridSeedPayload) payload;
+        clearLocalGrid();
         if (!ValidationUtils.hasValidDimensions(gsp.getWidth(), gsp.getHeight())) {
             LoggerUtil.INSTANCE.info(TextFX.colorize(
                     "[Game] Grid reset trigger received from server.",
                     Color.YELLOW));
-            clearLocalGrid();
+            //clearLocalGrid();
             return;
         }
 
-        clearLocalGrid();
+      
         localGridSeed = gsp.getSeed();
         Grid grid = new Grid();
         grid.setSize(gsp.getWidth(), gsp.getHeight());

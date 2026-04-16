@@ -5,7 +5,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Random;
 
-import M4.MCCS.Part1.Constants;
+import Project.Common.Constants;
 import Project.Common.Grid;
 import Project.Common.LoggerUtil;
 import Project.Common.Phase;
