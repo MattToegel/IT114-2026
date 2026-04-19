@@ -74,17 +74,6 @@ public class ServerThread extends BaseServerThread {
             case READY:
                 processReady(incoming);
                 break;
-            case TURN:
-                processTurn(incoming);
-                break;
-            case GUESS:
-                // @Deprecated guess flow
-                processGuess(incoming);
-                break;
-            case GRID_CELL_SYNC:
-                // @Deprecated grid test compatibility flow
-                processGridTestUpdate(incoming);
-                break;
             case CARD_ACTION:
                 processCardAction(incoming);
                 break;
@@ -95,11 +84,6 @@ public class ServerThread extends BaseServerThread {
 
     // Region used to hand off data to Server methods for processing
     // Start region for process*() methods ===================================
-    @Deprecated // @Deprecated guess flow
-    private void processGuess(Payload incoming) {
-        info("Processing guess payload");
-        Server.INSTANCE.handleGuess(this, incoming.getMessage());
-    }
 
     private void processCardAction(Payload incoming) {
         info("Processing card action payload");
@@ -109,22 +93,6 @@ public class ServerThread extends BaseServerThread {
         }
         CardActionPayload cap = (CardActionPayload) incoming;
         Server.INSTANCE.handleCardAction(this, cap.getCardId(), cap.getX(), cap.getY());
-    }
-
-    @Deprecated // @Deprecated grid test compatibility flow
-    private void processGridTestUpdate(Payload incoming) {
-        info("Processing grid test update payload");
-        if (!(incoming instanceof GridCellPayload)) {
-            info("Received invalid payload for grid test update: " + incoming);
-            return;
-        }
-        GridCellPayload gcp = (GridCellPayload) incoming;
-        Server.INSTANCE.handleGridTestUpdate(this, gcp.getX(), gcp.getY(), gcp.getValue());
-    }
-
-    private void processTurn(Payload incoming) {
-        info("Processing turn payload");
-        Server.INSTANCE.handleTurn(this, incoming.getMessage());
     }
 
     private void processReady(Payload incoming) {
@@ -208,17 +176,6 @@ public class ServerThread extends BaseServerThread {
         payload.setPayloadType(PayloadType.POINTS);
         payload.setClientId(clientId);
         payload.setPoints(points);
-        return sendToClient(payload);
-    }
-
-    @Deprecated // @Deprecated guess flow
-    protected boolean sendGuessConfirmation(int guess) {
-        // in this example the guess is a number, but since I want to keep the code
-        // changes minimal, I'll leverage PointsPayload to pass the confirmation back
-        // since it provides a slot for a number despite the name not making sense
-        PointsPayload payload = new PointsPayload();
-        payload.setPayloadType(PayloadType.GUESS);
-        payload.setPoints(guess); // abusing the points field to send the guess back for confirmation
         return sendToClient(payload);
     }
 

@@ -82,18 +82,6 @@ public enum Server {
 
     // start region for handle*() methods ===================================
 
-    protected synchronized void handleGuess(ServerThread sender, String guess) {
-        if (!isGameServerActive()) {
-            return;
-        }
-        try {
-            gameServer.handleGuess(sender, guess);
-        } catch (Exception e) {
-            LoggerUtil.INSTANCE.severe("Game server handleGuess failed", e);
-        }
-    }
-
-    
     protected synchronized void handleCardAction(ServerThread sender, int cardId, int x, int y) {
         if (!isGameServerActive()) {
             return;
@@ -102,33 +90,6 @@ public enum Server {
             gameServer.handleCardAction(sender, cardId, x, y);
         } catch (Exception e) {
             LoggerUtil.INSTANCE.severe("Game server handleCardAction failed", e);
-        }
-    }
-
-    @Deprecated // @Deprecated grid test compatibility flow
-    protected synchronized void handleGridTestUpdate(ServerThread sender, int x, int y, int value) {
-        if (!isGameServerActive()) {
-            return;
-        }
-        try {
-            gameServer.handleGridTestUpdate(sender, x, y, value);
-        } catch (Exception e) {
-            LoggerUtil.INSTANCE.severe("Game server handleGridTestUpdate failed", e);
-        }
-    }
-
-    /**
-     * Passes user's turn action to the game session
-     */
-    @Deprecated
-    protected synchronized void handleTurn(ServerThread sender, String action) {
-        if (!isGameServerActive()) {
-            return;
-        }
-        try {
-            gameServer.handleTurn(sender, action);
-        } catch (Exception e) {
-            LoggerUtil.INSTANCE.severe("Game server handleTurn failed", e);
         }
     }
 

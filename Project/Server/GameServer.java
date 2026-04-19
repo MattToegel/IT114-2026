@@ -20,7 +20,7 @@ import Project.Exceptions.ValidationException;
  *
  * Commands currently supported from clients:
  * - /ready
- * - /turn <action>
+ * - /card <cardId> <x> <y>
  */
 public class GameServer extends BaseGameServer {
 
@@ -39,9 +39,6 @@ public class GameServer extends BaseGameServer {
     private volatile TimedEvent turnTimer;
     private volatile Long currentTurnPlayerId;
     private int roundNumber = 0;
-    // @Deprecated guess flow example data
-    @Deprecated
-    private int hiddenNumber = 0;
     private volatile Grid currentGrid;
     private volatile long currentGridSeed = 0L;
     private final Random deckRng = new Random();
@@ -149,8 +146,6 @@ public class GameServer extends BaseGameServer {
         }
         roundNumber++; // TODO: future lessons may sync this as number later for better UI visibility
         broadcastGameMessage("Round " + roundNumber + " started. Each player gets one grid action.");
-        // example round setup
-        hiddenNumber = new Random().nextInt(10) + 1;
         broadcastGameMessage("Use /card <cardId> <x> <y> on your turn.");
         LoggerUtil.INSTANCE.info("[GameServer] onRoundStart() end");
         onTurnStart(); // this example users onTurnStart() for individual turn pacing
@@ -207,8 +202,6 @@ public class GameServer extends BaseGameServer {
             }
         }
         LoggerUtil.INSTANCE.info("[GameServer] onTurnEnd() end");
-        // onRoundEnd(); this example doesn't use turns, but this hook is called at the
-        // end of handleTurn() and we don't want it to end the round
 
         // if all players have taken their turn, enter onRoundEnd() early instead of
         // waiting for the turn timer to expire
@@ -236,28 +229,6 @@ public class GameServer extends BaseGameServer {
         resetRoundTimer();
         broadcastGameMessage("Round ended.");
 
-        /*
-         * // @Deprecated guess flow: everyone gains a point for a correct guess
-         * broadcastGameMessage("Evaluating guesses... The correct number was " +
-         * hiddenNumber);
-         * List<ServerThread> snapshot = new ArrayList<>(getActivePlayers());
-         * for (ServerThread player : snapshot) {
-         * if (player.getGuess() == hiddenNumber) {
-         * player.setPoints(player.getPoints() + 1);
-         * // sync points to all
-         * broadcastPlayerPoints(player);
-         * // feedback
-         * broadcastGameMessage(
-         * String.format("%s guessed correctly and gained a point!",
-         * player.getDisplayName()));
-         * // can reset guess here
-         * player.setGuess(0);
-         * } else {
-         * unicastGameMessage(player, "Your guess was incorrect.");
-         * }
-         * }
-         */
-
         LoggerUtil.INSTANCE.info("[GameServer] onRoundEnd() end");
 
         if (roundNumber >= 5) { // arbitrary end condition for example purposes
@@ -265,7 +236,6 @@ public class GameServer extends BaseGameServer {
         } else {
             onRoundStart();
         }
-        // onSessionEnd();
     }
 
     @Override
@@ -385,55 +355,6 @@ public class GameServer extends BaseGameServer {
 
     // start region for handle*() methods called by Server
 
-    @Deprecated // @Deprecated guess flow
-    protected void handleGuess(ServerThread sender, String guess) {
-        try {
-            ValidationUtils.requireParticipating(isActivePlayer(sender));
-            ValidationUtils.requirePhase(phase, Phase.IN_PROGRESS);
-            ValidationUtils.requireTurnNotTaken(sender.isTurnTaken()); // optional check to prevent multiple guesses if
-                                                                       // you want to enforce one guess per turn; can be
-                                                                       // removed and adjusted for more flexible rules
-                                                                       // (would need to decide how to handle multiple
-                                                                       // guesses in the game logic, like take the first
-                                                                       // guess, average them, etc.)
-            ValidationUtils.requireCurrentPlayer(currentTurnPlayerId, sender.getClientId()); // Key validation to ensure
-                                                                                             // individual turn order is
-                                                                                             // enforced
-            guess = ValidationUtils.requireValidTurnOption(guess.trim());
-            // although validation should verify it's a number, I'll see do a try/catch just
-            // in case
-            // that way if I mistakenly change requireValidTurnOption() in the future and it
-            // stops validating properly, I have a fallback to prevent server crashes from
-            // NumberFormatException
-            try {
-                int guessValue = Integer.parseInt(guess);
-                // record server local state (used in round end)
-                sender.setGuess(guessValue);
-                // unicast guess to player for confirmation
-                unicastGuessConfirmation(sender, guessValue);
-                // NOTE: we won't evaluate here, we'll do it during onRoundEnd()
-            } catch (NumberFormatException e) {
-                LoggerUtil.INSTANCE.warning("[GameServer] Failed to parse turn action as number: " + guess);
-                unicastGameMessage(sender,
-                        "Failed to parse your guess as a number. Please enter a valid number between 1 and 10.");
-                return;
-            }
-
-            // keep the guess hidden from other players in this example
-            broadcastGameMessage(sender.getDisplayName() + " made a guess.");
-            // Note: technically if your action has data, turnTaken can be derived by
-            // whether or not data was recorded, but I'll keep it as a separate property for
-            // simplicity and flexibility. In a fuller project, deriving information is more
-            // efficient
-            sender.setTurnTaken(true);
-            broadcastTurnStatus(sender.getClientId(), true);
-            onTurnEnd();
-        } catch (ValidationException e) {
-            LoggerUtil.INSTANCE.warning("[GameServer] " + e.getMessage());
-            unicastGameMessage(sender, e.getMessage());
-        }
-    }
-
     public void handleCardAction(ServerThread sender, int cardId, int x, int y) {
         try {
             ValidationUtils.requireParticipating(isActivePlayer(sender));
@@ -488,12 +409,6 @@ public class GameServer extends BaseGameServer {
         }
     }
 
-    @Deprecated // @Deprecated grid test compatibility flow
-    public void handleGridTestUpdate(ServerThread sender, int x, int y, int value) {
-        // Compatibility path for older /gridtest payloads.
-        handleCardAction(sender, value, x, y);
-    }
-
     /**
      * Handles a player's ready action. Validates the action, registers them as an
      * active player, and starts the ready timer. Sends an error message back to the
@@ -518,32 +433,6 @@ public class GameServer extends BaseGameServer {
             broadcastReadyStatus(sender.getClientId(), true);
             broadcastGameMessage(sender.getDisplayName() + " is ready. (" + getActivePlayerCount() + " active)");
             startReadyTimer(false);
-        } catch (ValidationException e) {
-            LoggerUtil.INSTANCE.warning("[GameServer] " + e.getMessage());
-            unicastGameMessage(sender, e.getMessage());
-        }
-    }
-
-    /**
-     * Handles a player's turn action. Validates the action, records the turn, and
-     * advances the game. Sends an error message back to the player on failure.
-     */
-    @Deprecated
-    public void handleTurn(ServerThread sender, String action) {
-        try {
-            ValidationUtils.requireParticipating(isActivePlayer(sender));
-            ValidationUtils.requirePhase(phase, Phase.IN_PROGRESS);
-            ValidationUtils.requireTurnNotTaken(sender.isTurnTaken());
-            String normalizedAction = ValidationUtils.requireValidTurnOption(action);
-
-            // TODO: turn logic would go here, in this example we're just marking that we
-            // took a turn
-            // ValidationUtils.requireCurrentPlayer(currentTurnPlayerId,
-            // sender.getClientId());
-
-            sender.setTurnTaken(true);
-            broadcastTurnStatus(sender.getClientId(), true);
-            onTurnEnd();
         } catch (ValidationException e) {
             LoggerUtil.INSTANCE.warning("[GameServer] " + e.getMessage());
             unicastGameMessage(sender, e.getMessage());
@@ -610,10 +499,6 @@ public class GameServer extends BaseGameServer {
             return;
         }
         Server.INSTANCE.unicast(target, serverThread -> serverThread.sendPlayerPoints(clientId, points));
-    }
-
-    private void unicastGuessConfirmation(ServerThread target, int guess) {
-        Server.INSTANCE.unicast(target, serverThread -> serverThread.sendGuessConfirmation(guess));
     }
 
     /**

@@ -8,8 +8,6 @@ public class User {
     private String clientName;
     private boolean ready;
     private boolean turnTaken;
-    @Deprecated // @Deprecated guess flow
-    private int guess = 0;// example user data
     private int points = 0;
     private final List<Integer> cardIds = new ArrayList<>();
 
@@ -40,22 +38,6 @@ public class User {
      */
     public void setPoints(int points) {
         this.points = points;
-    }
-
-    /**
-     * @return the guess
-     */
-    @Deprecated // @Deprecated guess flow
-    public int getGuess() {
-        return guess;
-    }
-
-    /**
-     * @param guess the guess to set
-     */
-    @Deprecated // @Deprecated guess flow
-    public void setGuess(int guess) {
-        this.guess = guess;
     }
 
     /**
@@ -129,7 +111,6 @@ public class User {
     public void resetGameState() {
         this.ready = false;
         this.turnTaken = false;
-        this.guess = 0; // example user data
         this.points = 0;
         this.cardIds.clear();
     }

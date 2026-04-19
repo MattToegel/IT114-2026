@@ -152,13 +152,12 @@ public enum Client {
             case USERS: // client-side command
                 StringBuilder sb = new StringBuilder();
                 sb.append("Known clients:\n");
-                knownUsers.values().forEach(c -> sb.append(String.format("%s%s Ready:%s Turn:%s Points:%s Guess:%s\n",
+                knownUsers.values().forEach(c -> sb.append(String.format("%s%s Ready:%s Turn:%s Points:%s\n",
                         c.getDisplayName(),
                         c.getClientId() == myUser.getClientId() ? " (you)" : "",
                         c.isReady() ? "[x]" : "[ ]",
                         c.isTurnTaken() ? "[x]" : "[ ]",
-                        c.getPoints(),
-                        c.getGuess() == 0 ? "[?]" : c.getGuess())));
+                        c.getPoints())));
                 LoggerUtil.INSTANCE.info(TextFX.colorize(sb.toString().trim(), Color.CYAN));
                 return true;
             case REVERSE:
@@ -181,21 +180,11 @@ public enum Client {
             case READY:
                 sendReady();
                 return true;
-            // @Deprecated
-            case TURN:
-                String turnAction = text.replaceFirst("/turn", "").trim();
-                sendTurn(turnAction);
-                return true;
             case VALIDATE_CLIENT:
                 isLocalValidationEnabled = !isLocalValidationEnabled;
                 LoggerUtil.INSTANCE.info(TextFX.colorize(
                         "Client-side validation " + (isLocalValidationEnabled ? "enabled" : "disabled"),
                         Color.GREEN));
-                return true;
-            // @Deprecated
-            case GUESS:
-                String guessText = text.replaceFirst("/guess", "").trim();
-                sendGuess(guessText);
                 return true;
             case GRID:
                 printLocalGrid();
@@ -206,11 +195,6 @@ public enum Client {
                 return true;
             case HAND:
                 printLocalHand();
-                return true;
-            // @Deprecated grid test compatibility flow
-            case GRID_TEST:
-                String gridTestArgs = text.replaceFirst("/gridtest", "").trim();
-                sendGridTestUpdate(gridTestArgs);
                 return true;
             default:
                 return false;
@@ -256,35 +240,6 @@ public enum Client {
     // end region for misc
 
     // Start region for send*() methods ===================================
-    /**
-     * Sends a guess action to the server with the user's chosen option. <br>
-     * Wraps the action in a Payload object with PayloadType.GUESS.
-     *
-     * @param action
-     * @throws IOException
-     */
-    @Deprecated // @Deprecated guess flow
-    private void sendGuess(String action) throws IOException {
-        String validatedTurnAction = action == null ? "" : action.trim();
-
-        if (isLocalValidationEnabled) {
-            try {
-                ValidationUtils.requirePhase(currentGamePhase, Phase.IN_PROGRESS);
-                ValidationUtils.requireParticipating(myUser.isReady());
-                ValidationUtils.requireTurnNotTaken(myUser.isTurnTaken());
-                validatedTurnAction = ValidationUtils.requireValidTurnOption(validatedTurnAction);
-            } catch (ValidationException e) {
-                LoggerUtil.INSTANCE.warning(TextFX.colorize(e.getMessage(), Color.YELLOW));
-                return;
-            }
-        }
-
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.GUESS);
-        payload.setMessage(validatedTurnAction);
-        sendToServer(payload);
-    }
-
     private void sendCardAction(String args) throws IOException {
         String[] parts = args == null ? new String[0] : args.trim().split("\\s+");
         if (parts.length != 3) {
@@ -328,47 +283,6 @@ public enum Client {
         sendToServer(payload);
     }
 
-    @Deprecated // @Deprecated grid test compatibility flow
-    private void sendGridTestUpdate(String args) throws IOException {
-        String[] parts = args == null ? new String[0] : args.trim().split("\\s+");
-        if (parts.length != 3) {
-            LoggerUtil.INSTANCE.warning("Usage: /gridtest <x> <y> <value 0-9>");
-            return;
-        }
-
-        int x;
-        int y;
-        int value;
-        try {
-            x = Integer.parseInt(parts[0]);
-            y = Integer.parseInt(parts[1]);
-            value = Integer.parseInt(parts[2]);
-        } catch (NumberFormatException e) {
-            LoggerUtil.INSTANCE.warning("Usage: /gridtest <x> <y> <value 0-9>");
-            return;
-        }
-
-        if (isLocalValidationEnabled) {
-            try {
-                ValidationUtils.requireValidCellValue(value);
-                if (localGrid != null) {
-                    ValidationUtils.requireInBounds(x, y, localGrid.getWidth(), localGrid.getHeight());
-                }
-            } catch (ValidationException e) {
-                LoggerUtil.INSTANCE.warning(TextFX.colorize(e.getMessage(), Color.YELLOW));
-                return;
-            }
-        }
-
-        GridCellPayload payload = new GridCellPayload();
-        // temporary: reusing GRID_CELL_SYNC for client->server test updates
-        payload.setPayloadType(PayloadType.GRID_CELL_SYNC);
-        payload.setX(x);
-        payload.setY(y);
-        payload.setValue(value);
-        sendToServer(payload);
-    }
-
     /**
      * Sends a ready-check action to the server.
      */
@@ -385,31 +299,6 @@ public enum Client {
 
         Payload payload = new Payload();
         payload.setPayloadType(PayloadType.READY);
-        sendToServer(payload);
-    }
-
-    /**
-     * Sends a turn action to the server.
-     */
-    @Deprecated
-    private void sendTurn(String action) throws IOException {
-        String validatedTurnAction = action == null ? "" : action.trim();
-
-        if (isLocalValidationEnabled) {
-            try {
-                ValidationUtils.requirePhase(currentGamePhase, Phase.IN_PROGRESS);
-                ValidationUtils.requireParticipating(myUser.isReady());
-                ValidationUtils.requireTurnNotTaken(myUser.isTurnTaken());
-                validatedTurnAction = ValidationUtils.requireValidTurnOption(validatedTurnAction);
-            } catch (ValidationException e) {
-                LoggerUtil.INSTANCE.warning(TextFX.colorize(e.getMessage(), Color.YELLOW));
-                return;
-            }
-        }
-
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.TURN); // updated for this specific example
-        payload.setMessage(validatedTurnAction);
         sendToServer(payload);
     }
 
@@ -557,9 +446,6 @@ public enum Client {
             case DISCONNECT: // server acknowledged this client's disconnect command; close connection
                 LoggerUtil.INSTANCE.info("Server acknowledged disconnect. Closing connection.");
                 closeServerConnection();
-                break;
-            case GUESS:
-                processGuessConfirmation(payload);
                 break;
             case POINTS:
                 processPoints(payload);
@@ -715,16 +601,6 @@ public enum Client {
 
     }
 
-    private void processGuessConfirmation(Payload payload) {
-        if (!(payload instanceof PointsPayload)) {
-            LoggerUtil.INSTANCE.warning("Expected PointsPayload for GUESS confirmation, got: " + payload.getClass());
-            return;
-        }
-        int guess = ((PointsPayload) payload).getPoints(); // abusing the points field to receive the guess back
-        myUser.setGuess(guess); // update local state (example)
-        LoggerUtil.INSTANCE.info(TextFX.colorize("Your guess of " + guess + " has been recorded.", Color.GREEN));
-    }
-
     private void processTurnStatus(Payload payload) {
         if (!(payload instanceof BoolPayload)) {
             LoggerUtil.INSTANCE.warning("Expected BoolPayload for PLAYER_TURN_STATUS, got: " + payload.getClass());
@@ -757,6 +633,7 @@ public enum Client {
             return;
         }
         BoolPayload bp = (BoolPayload) payload;
+        // uses default client id as a reset trigger
         if (bp.getClientId() == Constants.DEFAULT_CLIENT_ID) {
             // reset trigger for all users; update entire knownUsers cache
             // option 1: reset just the ready status
