@@ -18,6 +18,8 @@ import Project.Common.Phase;
 import Project.Common.PointsPayload;
 import Project.Common.Payload;
 import Project.Common.PayloadType;
+import Project.Common.TimerPayload;
+import Project.Common.TimerType;
 import Project.Common.LoggerUtil;
 
 /**
@@ -198,6 +200,14 @@ public class ServerThread extends BaseServerThread {
         return sendToClient(payload);
     }
 
+    protected boolean sendGameTimer(TimerType timerType, int secondsRemaining) {
+        TimerPayload payload = new TimerPayload();
+        payload.setPayloadType(PayloadType.GAME_TIMER_SYNC);
+        payload.setTimerType(timerType);
+        payload.setSecondsRemaining(secondsRemaining);
+        return sendToClient(payload);
+    }
+
     protected boolean sendReadyStatus(long clientId, boolean isReady) {
         BoolPayload payload = new BoolPayload();
         payload.setPayloadType(PayloadType.PLAYER_READY_STATUS);
@@ -261,6 +271,19 @@ public class ServerThread extends BaseServerThread {
     protected boolean sendMessage(String message) {
         Payload payload = new Payload();
         payload.setPayloadType(PayloadType.MESSAGE);
+        payload.setMessage(message);
+        return sendToClient(payload);
+    }
+
+    /**
+     * Sends a server-generated game event message tagged with GAME_CLIENT_ID (-2).
+     * Clients use this sentinel to route the message to the game events panel
+     * instead of the chat view.
+     */
+    protected boolean sendGameMessage(String message) {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.MESSAGE);
+        payload.setClientId(Constants.GAME_CLIENT_ID);
         payload.setMessage(message);
         return sendToClient(payload);
     }

@@ -5,12 +5,26 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.util.List;
+import java.util.Map;
 import java.util.Scanner;
+import java.util.LinkedHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import Project.Client.Interfaces.IChatEvents;
+import Project.Client.Interfaces.IClientCommands;
+import Project.Client.Interfaces.IClientEvents;
+import Project.Client.Interfaces.IConnectionEvents;
+import Project.Client.Interfaces.IGameBoardEvents;
+import Project.Client.Interfaces.IGameFlowEvents;
+import Project.Client.Interfaces.IGameTimerEvents;
+import Project.Client.Interfaces.IPlayerEvents;
+import Project.Client.Interfaces.IPlayerStatusEvents;
 import Project.Common.Constants;
 import Project.Common.ConnectionPayload;
 import Project.Common.BoolPayload;
@@ -28,6 +42,8 @@ import Project.Common.Phase;
 import Project.Common.PointsPayload;
 import Project.Common.TextFX;
 import Project.Common.TextFX.Color;
+import Project.Common.TimerPayload;
+import Project.Common.TimerType;
 import Project.Common.User;
 import Project.Common.ValidationUtils;
 import Project.Exceptions.ValidationException;
@@ -35,7 +51,7 @@ import Project.Exceptions.ValidationException;
 /**
  * Multi-client chat client using ObjectInputStream/ObjectOutputStream.
  */
-public enum Client {
+public enum Client implements IClientCommands {
     INSTANCE;
 
     {
@@ -63,12 +79,177 @@ public enum Client {
     private volatile boolean isLocalValidationEnabled = true;
     private volatile Grid localGrid;
     private volatile long localGridSeed = 0L;
+    private volatile long currentTurnClientId = Constants.DEFAULT_CLIENT_ID;
+    private final List<IClientEvents> uiCallbacks = new CopyOnWriteArrayList<>();
     // Client-side card catalog: id -> Card data.
     // This lets the UI show card values while the server still remains authoritative.
     private final ConcurrentHashMap<Integer, Card> cardCatalog = new ConcurrentHashMap<>();
 
     private Client() {
         LoggerUtil.INSTANCE.info("Client Created");
+    }
+
+    public void registerCallback(IClientEvents callback) {
+        if (callback != null && !uiCallbacks.contains(callback)) {
+            uiCallbacks.add(callback);
+        }
+    }
+
+    public void unregisterCallback(IClientEvents callback) {
+        uiCallbacks.remove(callback);
+    }
+
+    public synchronized Map<Long, User> getKnownUsersSnapshot() {
+        ConcurrentHashMap<Long, User> snapshot = new ConcurrentHashMap<>();
+        knownUsers.forEach((id, user) -> {
+            User copy = new User(user.getClientId(), user.getClientName());
+            copy.setReady(user.isReady());
+            copy.setTurnTaken(user.isTurnTaken());
+            copy.setPoints(user.getPoints());
+            copy.setCardIds(user.getCardIds());
+            snapshot.put(id, copy);
+        });
+        return snapshot;
+    }
+
+    public synchronized User getMyUserSnapshot() {
+        User copy = new User(myUser.getClientId(), myUser.getClientName());
+        copy.setReady(myUser.isReady());
+        copy.setTurnTaken(myUser.isTurnTaken());
+        copy.setPoints(myUser.getPoints());
+        copy.setCardIds(myUser.getCardIds());
+        return copy;
+    }
+
+    public synchronized long getLocalPlayerId() {
+        return myUser.getClientId();
+    }
+
+    public synchronized boolean isLocalPlayer(long clientId) {
+        return myUser.getClientId() == clientId;
+    }
+
+    public Phase getCurrentGamePhase() {
+        return currentGamePhase;
+    }
+
+    public long getCurrentTurnClientId() {
+        return currentTurnClientId;
+    }
+
+    public synchronized Grid getLocalGridSnapshot() {
+        if (localGrid == null) {
+            return null;
+        }
+        Grid copy = new Grid();
+        copy.setSize(localGrid.getWidth(), localGrid.getHeight());
+        for (int x = 0; x < localGrid.getWidth(); x++) {
+            for (int y = 0; y < localGrid.getHeight(); y++) {
+                copy.setValue(x, y, localGrid.getValue(x, y));
+            }
+        }
+        return copy;
+    }
+
+    public synchronized Grid getLocalGridReference() {
+        return localGrid;
+    }
+
+    public synchronized Map<Integer, Card> getCardCatalogSnapshot() {
+        return new LinkedHashMap<>(cardCatalog);
+    }
+
+    public synchronized String getCurrentTurnDisplayName() {
+        User turnUser = knownUsers.get(currentTurnClientId);
+        return turnUser != null ? turnUser.getDisplayName() : "Unknown";
+    }
+
+    private <T> void passToUiCallbacks(Class<T> type, Consumer<T> consumer) {
+        try {
+            for (IClientEvents callback : uiCallbacks) {
+                if (type.isInstance(callback)) {
+                    consumer.accept(type.cast(callback));
+                }
+            }
+        } catch (Exception e) {
+            LoggerUtil.INSTANCE.severe("Error passing to UI callback", e);
+        }
+    }
+
+    private void emitUiConnected() {
+        User localUser = getMyUserSnapshot();
+        passToUiCallbacks(IConnectionEvents.class, callback -> callback.onConnected(localUser));
+    }
+
+    private void emitUiDisconnected() {
+        passToUiCallbacks(IConnectionEvents.class, IConnectionEvents::onDisconnected);
+    }
+
+    private void emitUiPlayersUpdated() {
+        Map<Long, User> players = getKnownUsersSnapshot();
+        passToUiCallbacks(IPlayerEvents.class, callback -> callback.onPlayersUpdated(players));
+    }
+
+    private void emitUiLocalPlayerStatusUpdated() {
+        User localPlayer = getMyUserSnapshot();
+        passToUiCallbacks(IPlayerStatusEvents.class, callback -> callback.onLocalPlayerStatusUpdated(localPlayer));
+    }
+
+    private void emitUiPlayerStatusUpdated(User user) {
+        if (user == null) {
+            return;
+        }
+        passToUiCallbacks(IPlayerStatusEvents.class,
+                callback -> callback.onPlayerStatusUpdated(
+                        user.getClientId(),
+                        user.isReady(),
+                        user.isTurnTaken(),
+                        user.getPoints()));
+    }
+
+    private void emitUiAllPlayerStatusesReset() {
+        passToUiCallbacks(IPlayerStatusEvents.class, IPlayerStatusEvents::onAllPlayerStatusesReset);
+    }
+
+    private void emitUiGameEventMessage(String message) {
+        passToUiCallbacks(IGameFlowEvents.class, callback -> callback.onGameMessageReceived(message));
+    }
+
+    private void emitUiChatMessage(String message) {
+        passToUiCallbacks(IChatEvents.class, callback -> callback.onChatMessageReceived(message));
+    }
+
+    private void emitUiSystemMessage(String message) {
+        passToUiCallbacks(IChatEvents.class, callback -> callback.onSystemMessageReceived(message));
+    }
+
+    private void emitUiGamePhaseUpdated() {
+        Phase phase = getCurrentGamePhase();
+        passToUiCallbacks(IGameFlowEvents.class, callback -> callback.onGamePhaseUpdated(phase));
+    }
+
+    private void emitUiCurrentTurnUpdated() {
+        long currentTurnId = getCurrentTurnClientId();
+        String currentTurnName = getCurrentTurnDisplayName();
+        passToUiCallbacks(IGameFlowEvents.class,
+                callback -> callback.onCurrentTurnUpdated(currentTurnId, currentTurnName));
+    }
+
+    private void emitUiLocalGridUpdated() {
+        Grid localGridSnapshot = getLocalGridSnapshot();
+        passToUiCallbacks(IGameBoardEvents.class, callback -> callback.onLocalGridUpdated(localGridSnapshot));
+    }
+
+    private void emitUiLocalHandUpdated() {
+        User localPlayer = getMyUserSnapshot();
+        Map<Integer, Card> cardCatalogSnapshot = getCardCatalogSnapshot();
+        passToUiCallbacks(IGameBoardEvents.class,
+                callback -> callback.onLocalHandUpdated(localPlayer, cardCatalogSnapshot));
+    }
+
+    private void emitUiGameTimerUpdated(TimerType timerType, int secondsRemaining) {
+        passToUiCallbacks(IGameTimerEvents.class,
+                callback -> callback.onGameTimerUpdated(timerType, secondsRemaining));
     }
 
     public boolean isConnected() {
@@ -88,6 +269,7 @@ public enum Client {
      */
     private boolean connect(String address, int port) {
         try {
+            isRunning = true;
             server = new Socket(address, port);
             // ObjectOutputStream must be created before ObjectInputStream on both sides to
             // avoid deadlock
@@ -97,11 +279,89 @@ public enum Client {
             CompletableFuture.runAsync(this::listenToServer);
         } catch (UnknownHostException e) {
             LoggerUtil.INSTANCE.severe("Unknown host: " + e.getMessage());
+            emitUiSystemMessage("Unknown host: " + e.getMessage());
         } catch (IOException e) {
             LoggerUtil.INSTANCE.severe("IO error: " + e.getMessage());
+            emitUiSystemMessage("Connection failed: " + e.getMessage());
         }
         return isConnected();
     }
+
+    // start region IClientCommands implementation
+    // Methods in this block are the public command surface used by the UI.
+
+    @Override
+    public boolean connectToServer(String host, int port, String name) {
+        try {
+            ValidationUtils.requireNotBlank(name, "Name cannot be blank");
+            myUser.setClientName(name.trim());
+            if (!connect(host, port)) {
+                return false;
+            }
+            sendConnectionData(myUser.getClientName());
+            return true;
+        } catch (ValidationException e) {
+            LoggerUtil.INSTANCE.warning(TextFX.colorize(e.getMessage(), Color.YELLOW));
+            emitUiSystemMessage(e.getMessage());
+        } catch (IOException e) {
+            LoggerUtil.INSTANCE.severe("Failed to send connection payload: " + e.getMessage());
+            emitUiSystemMessage("Failed to complete connection handshake.");
+        }
+        return false;
+    }
+
+    @Override
+    public void disconnectFromServer() {
+        try {
+            sendDisconnect();
+        } catch (IOException e) {
+            LoggerUtil.INSTANCE.warning("Failed to send disconnect payload: " + e.getMessage());
+            closeServerConnection();
+        }
+    }
+
+    @Override
+    public void sendChatMessage(String text) {
+        if (ValidationUtils.isNullOrBlank(text)) {
+            return;
+        }
+        try {
+            sendMessage(text.trim());
+        } catch (IOException e) {
+            LoggerUtil.INSTANCE.warning("Failed to send chat message: " + e.getMessage());
+            emitUiSystemMessage("Failed to send message.");
+        }
+    }
+
+    @Override
+    public void sendReadySignal() {
+        try {
+            sendReady();
+        } catch (IOException e) {
+            LoggerUtil.INSTANCE.warning("Failed to send ready signal: " + e.getMessage());
+            emitUiSystemMessage("Failed to send ready signal.");
+        }
+    }
+
+    @Override
+    public void sendCardAction(int cardId, int x, int y) {
+        try {
+            sendCardAction(String.format("%d %d %d", cardId, x, y));
+        } catch (IOException e) {
+            LoggerUtil.INSTANCE.warning("Failed to send card action: " + e.getMessage());
+            emitUiSystemMessage("Failed to send card action.");
+        }
+    }
+
+    @Override
+    public void setDisplayName(String name) {
+        if (ValidationUtils.isNullOrBlank(name)) {
+            emitUiSystemMessage("Name cannot be blank.");
+            return;
+        }
+        myUser.setClientName(name.trim());
+    }
+    // end region IClientCommands implementation
 
     private boolean isConnection(String text) {
         Matcher ipMatcher = ipAddressPattern.matcher(text);
@@ -154,7 +414,7 @@ public enum Client {
                 sb.append("Known clients:\n");
                 knownUsers.values().forEach(c -> sb.append(String.format("%s%s Ready:%s Turn:%s Points:%s\n",
                         c.getDisplayName(),
-                        c.getClientId() == myUser.getClientId() ? " (you)" : "",
+                    isLocalPlayer(c.getClientId()) ? " (you)" : "",
                         c.isReady() ? "[x]" : "[ ]",
                         c.isTurnTaken() ? "[x]" : "[ ]",
                         c.getPoints())));
@@ -350,6 +610,10 @@ public enum Client {
      * @throws IOException
      */
     private void sendMessage(String text) throws IOException {
+        if(processClientCommand(text)){
+            // if the text was a client command, don't also send it as a message
+            return;
+        }
         Payload payload = new Payload();
         payload.setPayloadType(PayloadType.MESSAGE);
         payload.setMessage(text);
@@ -372,6 +636,10 @@ public enum Client {
         // join() attaches the async thread to the main thread so the program doesn't
         // exit prematurely
         inputFuture.join();
+    }
+
+    public void startNetworkOnly() {
+        LoggerUtil.INSTANCE.info("Client network mode ready");
     }
 
     /**
@@ -465,6 +733,9 @@ public enum Client {
             case CARD_CATALOG_SYNC:
                 processCardCatalogSync(payload);
                 break;
+            case GAME_TIMER_SYNC:
+                processGameTimerSync(payload);
+                break;
             default:
                 LoggerUtil.INSTANCE.warning("Received unhandled payload type: " + payload.getPayloadType());
         }
@@ -488,6 +759,8 @@ public enum Client {
 
         myUser.setCardIds(chp.getCardIds());
         LoggerUtil.INSTANCE.info(TextFX.colorize("[Game] Your hand: " + formatHandForDisplay(), Color.GREEN));
+        emitUiLocalPlayerStatusUpdated();
+        emitUiLocalHandUpdated();
     }
 
     private void processCardCatalogSync(Payload payload) {
@@ -507,6 +780,22 @@ public enum Client {
         }
         LoggerUtil.INSTANCE.info(TextFX.colorize("[Game] Card catalog synced: " + cardCatalog.size() + " cards.",
                 Color.GREEN));
+        emitUiLocalHandUpdated();
+    }
+
+    private void processGameTimerSync(Payload payload) {
+        if (!(payload instanceof TimerPayload)) {
+            LoggerUtil.INSTANCE.warning("Expected TimerPayload for GAME_TIMER_SYNC, got: " + payload.getClass());
+            return;
+        }
+        TimerPayload tp = (TimerPayload) payload;
+        TimerType timerType = tp.getTimerType();
+        if (timerType == null) {
+            LoggerUtil.INSTANCE.warning("Received GAME_TIMER_SYNC with blank timer type.");
+            return;
+        }
+
+        emitUiGameTimerUpdated(timerType, tp.getSecondsRemaining());
     }
     private void processGridSeedSync(Payload payload) {
         if (!(payload instanceof GridSeedPayload)) {
@@ -534,6 +823,7 @@ public enum Client {
                         localGridSeed),
                 Color.YELLOW));
         LoggerUtil.INSTANCE.info(TextFX.colorize("\n" + localGrid.toGridString(), Color.CYAN));
+        emitUiLocalGridUpdated();
     }
 
     private void processGridCellSync(Payload payload) {
@@ -555,6 +845,7 @@ public enum Client {
         }
         localGrid.setValue(gcp.getX(), gcp.getY(), gcp.getValue());
         LoggerUtil.INSTANCE.info(TextFX.colorize("\n" + localGrid.toGridString(), Color.CYAN));
+        emitUiLocalGridUpdated();
     }
 
     private void clearLocalGrid() {
@@ -566,11 +857,12 @@ public enum Client {
     }
 
     private void processCurrentTurn(Payload payload) {
-        long currentTurnClientId = payload.getClientId();
+        currentTurnClientId = payload.getClientId();
         User currentTurnUser = knownUsers.get(currentTurnClientId);
         // Use local map for name lookup
         String currentTurnName = currentTurnUser != null ? currentTurnUser.getDisplayName() : "Unknown";
         LoggerUtil.INSTANCE.info(TextFX.colorize("Current turn: " + currentTurnName, Color.YELLOW));
+        emitUiCurrentTurnUpdated();
     }
 
     private void processPoints(Payload payload) {
@@ -584,6 +876,7 @@ public enum Client {
             // reset points trigger for all users (if needing to reset during a session)
             knownUsers.forEach((key, user) -> user.setPoints(0));
             LoggerUtil.INSTANCE.info(TextFX.colorize("All users' points reset", Color.YELLOW));
+            emitUiAllPlayerStatusesReset();
             return;
         }
         User user = knownUsers.get(clientId);
@@ -597,6 +890,10 @@ public enum Client {
             LoggerUtil.INSTANCE.info(TextFX.colorize(
                     String.format("%s now has %d points", user.getDisplayName(), points),
                     Color.YELLOW));
+        }
+        emitUiPlayerStatusUpdated(user);
+        if (isLocalPlayer(user.getClientId())) {
+            emitUiLocalPlayerStatusUpdated();
         }
 
     }
@@ -612,6 +909,8 @@ public enum Client {
             // reset trigger for all users; update entire knownUsers cache
             knownUsers.forEach((key, user) -> user.setTurnTaken(false));
             LoggerUtil.INSTANCE.info(TextFX.colorize("All users' turn status reset", Color.YELLOW));
+            emitUiAllPlayerStatusesReset();
+            emitUiLocalPlayerStatusUpdated();
             return;
         }
         User user = knownUsers.get(bp.getClientId());
@@ -619,6 +918,11 @@ public enum Client {
             return;
         }
         user.setTurnTaken(bp.getValue());
+        emitUiPlayerStatusUpdated(user);
+        if (isLocalPlayer(user.getClientId())) {
+            emitUiLocalPlayerStatusUpdated();
+        }
+        emitUiCurrentTurnUpdated();
         // Uncomment for debugging local state synchronization from server turn-status
         // payloads.
         // LoggerUtil.INSTANCE.info(TextFX.colorize(
@@ -642,6 +946,12 @@ public enum Client {
             knownUsers.forEach((key, user) -> user.resetGameState());
             cardCatalog.clear();
             LoggerUtil.INSTANCE.info(TextFX.colorize("All users' ready status reset", Color.YELLOW));
+            emitUiAllPlayerStatusesReset();
+            emitUiLocalPlayerStatusUpdated();
+            emitUiGamePhaseUpdated();
+            emitUiCurrentTurnUpdated();
+            emitUiLocalGridUpdated();
+            emitUiLocalHandUpdated();
             return;
         }
 
@@ -650,6 +960,10 @@ public enum Client {
             return;
         }
         user.setReady(bp.getValue());
+        emitUiPlayerStatusUpdated(user);
+        if (isLocalPlayer(user.getClientId())) {
+            emitUiLocalPlayerStatusUpdated();
+        }
         // Uncomment for debugging local state synchronization from server ready-status
         // payloads.
         // LoggerUtil.INSTANCE.info(TextFX.colorize(
@@ -666,6 +980,7 @@ public enum Client {
         try {
             currentGamePhase = Phase.valueOf(phaseValue.trim().toUpperCase());
             LoggerUtil.INSTANCE.info(TextFX.colorize("[Game] Phase: " + currentGamePhase, Color.YELLOW));
+            emitUiGamePhaseUpdated();
         } catch (IllegalArgumentException e) {
             LoggerUtil.INSTANCE.warning("Received unknown game phase: " + phaseValue);
         }
@@ -674,16 +989,24 @@ public enum Client {
     private void processReverse(Payload payload) {
         // reversed text response from server; print it with a different color
         LoggerUtil.INSTANCE.info(TextFX.colorize(payload.getMessage(), Color.PURPLE));
+        emitUiSystemMessage(payload.getMessage());
     }
 
     /**
-     * Processes a MESSAGE payload from the server
-     * 
-     * @param payload
+     * Processes a MESSAGE payload from the server.
+     * Messages tagged with GAME_CLIENT_ID are game event messages and go to the
+     * game events panel. All other messages are regular chat.
      */
     private void processMessage(Payload payload) {
-        // regular chat message from another client; just print it
-        LoggerUtil.INSTANCE.info(TextFX.colorize(payload.getMessage(), Color.BLUE));
+        if (payload.getClientId() == Constants.GAME_CLIENT_ID) {
+            // Server-generated game event: route to game events panel, not chat.
+            LoggerUtil.INSTANCE.info(TextFX.colorize(payload.getMessage(), Color.YELLOW));
+            emitUiGameEventMessage(payload.getMessage());
+        } else {
+            // Regular user chat message.
+            LoggerUtil.INSTANCE.info(TextFX.colorize(payload.getMessage(), Color.BLUE));
+            emitUiChatMessage(payload.getMessage());
+        }
     }
 
     /**
@@ -714,6 +1037,7 @@ public enum Client {
                 // intentional fall-through: SERVER_JOIN and SERVER_SYNC both need putIfAbsent
             case SERVER_SYNC: // silent sync of existing clients on initial connect; just add to known users
                 knownUsers.putIfAbsent(clientId, incomingUserData);
+                emitUiPlayersUpdated();
                 break;
             case SERVER_LEAVE: // client left; remove from known users and print message
                 User removedUser = knownUsers.remove(incomingUserData.getClientId());
@@ -721,6 +1045,7 @@ public enum Client {
                     // only inform if we actually knew about the user
                     LoggerUtil.INSTANCE.info(TextFX.colorize(removedUser.getDisplayName() + " left", Color.RED));
                 }
+                emitUiPlayersUpdated();
                 break;
 
             default:
@@ -749,6 +1074,9 @@ public enum Client {
         // add to known users cache
         knownUsers.put(assignedId, myUser);
         LoggerUtil.INSTANCE.info(TextFX.colorize("Connected", Color.GREEN));
+        emitUiConnected();
+        emitUiLocalPlayerStatusUpdated();
+        emitUiPlayersUpdated();
     }
     // End region for process*() methods ===================================
 
@@ -784,6 +1112,7 @@ public enum Client {
         knownUsers.clear();
         myUser.reset();
         currentGamePhase = Phase.INACTIVE;
+        currentTurnClientId = Constants.DEFAULT_CLIENT_ID;
         clearLocalGrid();
         try {
             if (out != null) {
@@ -810,6 +1139,12 @@ public enum Client {
         } catch (IOException e) {
             e.printStackTrace();
         }
+        emitUiDisconnected();
+        emitUiPlayersUpdated();
+        emitUiGamePhaseUpdated();
+        emitUiCurrentTurnUpdated();
+        emitUiLocalGridUpdated();
+        emitUiLocalHandUpdated();
     }
 
     public static void main(String[] args) {

@@ -26,4 +26,5 @@ public enum PayloadType {
     CARD_ACTION, // client sends card id + target coordinates
     CARD_HAND_SYNC, // server syncs only the receiving client's hand card ids
     CARD_CATALOG_SYNC, // server syncs card definitions (id, mod) for client-side display
+    GAME_TIMER_SYNC, // server syncs timer type and remaining seconds
 }

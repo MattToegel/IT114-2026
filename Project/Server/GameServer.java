@@ -12,6 +12,7 @@ import Project.Common.Grid;
 import Project.Common.LoggerUtil;
 import Project.Common.Phase;
 import Project.Common.TimedEvent;
+import Project.Common.TimerType;
 import Project.Common.ValidationUtils;
 import Project.Exceptions.ValidationException;
 
@@ -28,6 +29,7 @@ public class GameServer extends BaseGameServer {
     private static final int READY_SECONDS = 30;
     private static final int ROUND_SECONDS = 30;
     private static final int TURN_SECONDS = 20;
+    private static final int EVALUATION_SECONDS = 5;
     private static final String GAME_TAG = "[Game] ";
     private static final int GRID_WIDTH = 5;
     private static final int GRID_HEIGHT = 5;
@@ -37,6 +39,7 @@ public class GameServer extends BaseGameServer {
     private volatile TimedEvent readyTimer;
     private volatile TimedEvent roundTimer;
     private volatile TimedEvent turnTimer;
+    private volatile TimedEvent evaluationTimer;
     private volatile Long currentTurnPlayerId;
     private int roundNumber = 0;
     private volatile Grid currentGrid;
@@ -143,10 +146,11 @@ public class GameServer extends BaseGameServer {
         for (ServerThread player : getActivePlayers()) {
             player.setTurnTaken(false);
             broadcastTurnStatus(player.getClientId(), false);
+            drawUpToHandSize(player);
+            unicastHand(player);
         }
         roundNumber++; // TODO: future lessons may sync this as number later for better UI visibility
         broadcastGameMessage("Round " + roundNumber + " started. Each player gets one grid action.");
-        broadcastGameMessage("Use /card <cardId> <x> <y> on your turn.");
         LoggerUtil.INSTANCE.info("[GameServer] onRoundStart() end");
         onTurnStart(); // this example users onTurnStart() for individual turn pacing
     }
@@ -182,8 +186,6 @@ public class GameServer extends BaseGameServer {
         unicastHand(currentPlayer);
         startTurnTimer();
         broadcastCurrentTurn(); // Message is generated on the client-side based on the clientId
-        broadcastGameMessage("Turn started for " + currentPlayer.getDisplayName()
-                + ". Use /card <cardId> <x> <y> within " + TURN_SECONDS + "s.");
         LoggerUtil.INSTANCE.info("[GameServer] onTurnStart() end");
     }
 
@@ -242,39 +244,59 @@ public class GameServer extends BaseGameServer {
     protected synchronized void onSessionEnd() {
         LoggerUtil.INSTANCE.info("[GameServer] onSessionEnd() start");
         resetReadyTimer();
+        resetEvaluationTimer();
         resetTurnTimer();
         resetRoundTimer();
 
         currentTurnPlayerId = null;
         broadcastGridReset();
         clearCurrentGrid();
-        phase = Phase.INACTIVE;
 
         List<ServerThread> snapshot = new ArrayList<>(getActivePlayers());
-        if (snapshot.isEmpty()) {
-            // this shouldn't be possible
-            broadcastGameMessage("Session ended with no winner.");
-        } else {
-            int topScore = snapshot.stream().mapToInt(ServerThread::getPoints).max().orElse(0);
-            List<ServerThread> winners = snapshot.stream()
-                    .filter(player -> player.getPoints() == topScore)
-                    .toList();
 
-            if (winners.size() == 1) {
-                ServerThread winner = winners.get(0);
-                broadcastGameMessage(String.format("Session ended: %s wins with %d points!",
-                        winner.getDisplayName(),
-                        winner.getPoints()));
-            } else {
-                String winnerNames = winners.stream()
-                        .map(ServerThread::getDisplayName)
-                        .collect(Collectors.joining(", "));
-                broadcastGameMessage(String.format("Session ended in a tie at %d points: %s",
-                        topScore,
-                        winnerNames));
-            }
+        // if not a valid session, reset state and don't produce scoring/winner output
+        if (phase.ordinal() <= Phase.READY.ordinal()) {
+            doSessionReset(snapshot);
+            return;
         }
 
+        if (snapshot.isEmpty()) {
+            broadcastGameMessage("Session ended with no winner.");
+            doSessionReset(snapshot);
+            return;
+        }
+
+        int topScore = snapshot.stream().mapToInt(ServerThread::getPoints).max().orElse(0);
+        List<ServerThread> winners = snapshot.stream()
+                .filter(player -> player.getPoints() == topScore)
+                .toList();
+
+        if (winners.size() == 1) {
+            ServerThread winner = winners.get(0);
+            broadcastGameMessage(String.format("Session ended: %s wins with %d points!",
+                    winner.getDisplayName(),
+                    winner.getPoints()));
+        } else {
+            String winnerNames = winners.stream()
+                    .map(ServerThread::getDisplayName)
+                    .collect(Collectors.joining(", "));
+            broadcastGameMessage(String.format("Session ended in a tie at %d points: %s",
+                    topScore,
+                    winnerNames));
+        }
+
+        phase = Phase.EVALUATION;
+        broadcastCurrentPhase();
+        broadcastGameMessage("Results displayed for " + EVALUATION_SECONDS + " seconds...");
+        startEvaluationTimer(snapshot);
+        LoggerUtil.INSTANCE.info("[GameServer] onSessionEnd() end — evaluation timer started");
+    }
+
+    // wrapped reset logic so a delay could be used to give users time to see the end results before reset
+    private void doSessionReset(List<ServerThread> snapshot) {
+        LoggerUtil.INSTANCE.info("[GameServer] doSessionReset() start");
+        resetEvaluationTimer();
+        phase = Phase.INACTIVE;
         // reset player data and sync changes to clients before clearing active players,
         // so that clients have a chance to update any relevant UI (like ready status)
         // before being removed from the session
@@ -288,7 +310,7 @@ public class GameServer extends BaseGameServer {
 
         broadcastCurrentPhase();
         broadcastGameMessage("Session ended. Type /ready to join the next session.");
-        LoggerUtil.INSTANCE.info("[GameServer] onSessionEnd() end");
+        LoggerUtil.INSTANCE.info("[GameServer] doSessionReset() end");
     }
     // end region for lifecycle hook implementations
 
@@ -303,7 +325,11 @@ public class GameServer extends BaseGameServer {
         }
         if (readyTimer == null) {
             readyTimer = new TimedEvent(READY_SECONDS, this::checkReadyStatus);
-            readyTimer.setTickCallback(time -> LoggerUtil.INSTANCE.info("[GameServer] Ready timer: " + time));
+            readyTimer.setTickCallback(time -> {
+                int clampedTime = Math.max(0, time);
+                LoggerUtil.INSTANCE.info("[GameServer] Ready timer: " + clampedTime);
+                broadcastGameTimer(TimerType.READY, clampedTime);
+            });
             broadcastGameMessage(
                     "Ready check started. Session begins in " + READY_SECONDS + "s if enough players are ready.");
         }
@@ -318,7 +344,11 @@ public class GameServer extends BaseGameServer {
 
     private synchronized void startRoundTimer() {
         roundTimer = new TimedEvent(ROUND_SECONDS, this::onRoundEnd);
-        roundTimer.setTickCallback(time -> LoggerUtil.INSTANCE.info("[GameServer] Round timer: " + time));
+        roundTimer.setTickCallback(time -> {
+            int clampedTime = Math.max(0, time);
+            LoggerUtil.INSTANCE.info("[GameServer] Round timer: " + clampedTime);
+            broadcastGameTimer(TimerType.ROUND, clampedTime);
+        });
     }
 
     private synchronized void resetRoundTimer() {
@@ -330,13 +360,34 @@ public class GameServer extends BaseGameServer {
 
     private synchronized void startTurnTimer() {
         turnTimer = new TimedEvent(TURN_SECONDS, this::onTurnEnd);
-        turnTimer.setTickCallback(time -> LoggerUtil.INSTANCE.info("[GameServer] Turn timer: " + time));
+        turnTimer.setTickCallback(time -> {
+            int clampedTime = Math.max(0, time);
+            LoggerUtil.INSTANCE.info("[GameServer] Turn timer: " + clampedTime);
+            broadcastGameTimer(TimerType.TURN, clampedTime);
+        });
     }
 
     private synchronized void resetTurnTimer() {
         if (turnTimer != null) {
             turnTimer.cancel();
             turnTimer = null;
+        }
+    }
+
+    private synchronized void startEvaluationTimer(List<ServerThread> snapshot) {
+        resetEvaluationTimer();
+        evaluationTimer = new TimedEvent(EVALUATION_SECONDS, () -> doSessionReset(snapshot));
+        evaluationTimer.setTickCallback(time -> {
+            int clampedTime = Math.max(0, time);
+            LoggerUtil.INSTANCE.info("[GameServer] Evaluation timer: " + clampedTime);
+            broadcastGameTimer(TimerType.EVALUATION, clampedTime);
+        });
+    }
+
+    private synchronized void resetEvaluationTimer() {
+        if (evaluationTimer != null) {
+            evaluationTimer.cancel();
+            evaluationTimer = null;
         }
     }
 
@@ -375,8 +426,6 @@ public class GameServer extends BaseGameServer {
             currentGrid.applyModifier(value, x, y);
             LoggerUtil.INSTANCE.info("[GameServer] Grid after update:\n" + currentGrid.toGridString());
             broadcastAffectedGridCells(x, y);
-
-            broadcastGameMessage(buildPlusPatternMessage(x, y));
 
             // determine score based on odds; add and broadcast
             int oddCount = currentGrid.countOdd(x, y);
@@ -565,18 +614,27 @@ public class GameServer extends BaseGameServer {
         Server.INSTANCE.unicast(target, serverThread -> serverThread.sendTurnStatus(clientId, hasTakenTurn));
     }
 
-    /** Sends a game message to all connected clients. */
+    /** Sends a game event message to all connected clients.
+     *  Tagged with GAME_CLIENT_ID so clients route it to the game events panel.
+     */
     private void broadcastGameMessage(String message) {
-        Server.INSTANCE.broadcast(null, GAME_TAG + message);
+        final String formatted = GAME_TAG + message;
+        Server.INSTANCE.sendOrDisconnect(serverThread -> serverThread.sendGameMessage(formatted));
     }
 
-    /** Sends a game message to a single client. */
+    /** Sends a game event message to a single client.
+     *  Tagged with GAME_CLIENT_ID so the client routes it to the game events panel.
+     */
     private void unicastGameMessage(ServerThread target, String message) {
         if (target == null) {
             return;
         }
         final String formatted = GAME_TAG + message;
-        Server.INSTANCE.unicast(target, serverThread -> serverThread.sendMessage(formatted));
+        Server.INSTANCE.unicast(target, serverThread -> serverThread.sendGameMessage(formatted));
+    }
+
+    private void broadcastGameTimer(TimerType timerType, int secondsRemaining) {
+        Server.INSTANCE.sendOrDisconnect(serverThread -> serverThread.sendGameTimer(timerType, secondsRemaining));
     }
 
     private void broadcastGridSeed() {
@@ -664,37 +722,6 @@ public class GameServer extends BaseGameServer {
     // end region for helper methods to send data to clients
 
     // start region misc utility methods
-    
-    private String buildPlusPatternMessage(int x, int y) {
-        if (currentGrid == null) {
-            return "Affected plus pattern: [grid unavailable]";
-        }
-        int w = currentGrid.getWidth();
-        int h = currentGrid.getHeight();
-
-        String top = getPatternCellValue(x, y - 1, w, h);
-        String left = getPatternCellValue(x - 1, y, w, h);
-        String center = getPatternCellValue(x, y, w, h);
-        String right = getPatternCellValue(x + 1, y, w, h);
-        String bottom = getPatternCellValue(x, y + 1, w, h);
-
-        return String.format(
-                "Affected plus pattern at (%d,%d):\n[ ][%s][ ]\n[%s][%s][%s]\n[ ][%s][ ]",
-                x,
-                y,
-                top,
-                left,
-                center,
-                right,
-                bottom);
-    }
-
-    private String getPatternCellValue(int x, int y, int w, int h) {
-        if (!ValidationUtils.isInBounds(x, y, w, h)) {
-            return " ";
-        }
-        return String.valueOf(currentGrid.getValue(x, y));
-    }
 
     private void drawUpToHandSize(ServerThread player) {
         if (currentDeck == null) {
