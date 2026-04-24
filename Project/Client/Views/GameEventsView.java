@@ -2,29 +2,22 @@ package Project.Client.Views;
 
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
-import java.util.HashMap;
-import java.util.Map;
 
 import javax.swing.BorderFactory;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 
 import Project.Client.Client;
-import Project.Client.Interfaces.IConnectionEvents;
-import Project.Client.Interfaces.IGameBoardEvents;
+import Project.Client.Interfaces.IGameFlowEvents;
 import Project.Client.Interfaces.IGameTimerEvents;
-import Project.Client.Interfaces.IPlayerStatusEvents;
-import Project.Common.Card;
-import Project.Common.Grid;
 import Project.Common.Phase;
 import Project.Common.TimerType;
-import Project.Common.User;
 
 /**
  * Game event feed that displays phase/turn/timer status and styled server game messages.
  */
 public class GameEventsView extends BaseMessagesView
-        implements IConnectionEvents, IGameBoardEvents, IPlayerStatusEvents, IGameTimerEvents {
+    implements IGameFlowEvents, IGameTimerEvents {
     private static final int OUTER_GAP = 0;
     private static final int STATUS_GAP_X = 16;
     private static final int STATUS_GAP_Y = 4;
@@ -37,11 +30,6 @@ public class GameEventsView extends BaseMessagesView
     private final JLabel phaseValue = new JLabel("INACTIVE");
     private final JLabel turnValue = new JLabel("Unknown");
     private final JLabel timeValue = new JLabel("N/A");
-    private Phase currentPhase = Phase.INACTIVE;
-
-    // Track prior server-synced values so we only log meaningful events.
-    private final Map<Long, Boolean> lastTurnTakenByPlayer = new HashMap<>();
-    private final Map<Long, Integer> lastPointsByPlayer = new HashMap<>();
 
     // Builds the status row + scrolling event feed and subscribes for callbacks.
     public GameEventsView() {
@@ -58,7 +46,11 @@ public class GameEventsView extends BaseMessagesView
         add(statusPanel, BorderLayout.NORTH);
 
         updateCurrentTurnVisibility();
+    }
 
+    @Override
+    public void addNotify() {
+        super.addNotify();
         // Self-subscribe for all event types this panel displays.
         Client.INSTANCE.registerCallback(this);
     }
@@ -110,33 +102,8 @@ public class GameEventsView extends BaseMessagesView
                 .replace("\n", "<br/>");
     }
 
-    // ---- IConnectionEvents ------------------------------------------------------
-
     @Override
-    public void onConnected(User localUser) {
-        // Connection messages belong in ChatView, not GameEventsView.
-    }
-
-    @Override
-    public void onDisconnected() {
-        // Connection messages belong in ChatView, not GameEventsView.
-    }
-
-    // ---- IGameBoardEvents -------------------------------------------------------
-
-    @Override
-    public void onLocalGridUpdated(Grid localGrid) {
-        // Grid sync messages are noisy and not game-event focused.
-    }
-
-    @Override
-    public void onLocalHandUpdated(User localPlayer, Map<Integer, Card> cardCatalog) {
-        // Hand sync messages are noisy and not game-event focused.
-    }
-
-    @Override
-    public void onGamePhaseUpdated(Phase phase) {
-        currentPhase = phase == null ? Phase.INACTIVE : phase;
+    public void onGamePhaseUpdated(Phase currentPhase) {
         phaseValue.setText(currentPhase.name());
         updateCurrentTurnVisibility();
 
@@ -168,51 +135,23 @@ public class GameEventsView extends BaseMessagesView
         timeValue.setText(display);
     }
 
-    // ---- IPlayerStatusEvents ----------------------------------------------------
-
     @Override
-    public void onLocalPlayerStatusUpdated(User localPlayer) {
-        // Local status updates are frequent and debug-like; use player status events
-        // below for meaningful turn/points logs.
+    public void onPlayerTurnCompleted(long playerId) {
+        appendEvent("[Turn] " + getPlayerLabel(playerId) + " completed their turn.");
     }
 
     @Override
-    public void onPlayerStatusUpdated(long playerId, boolean ready, boolean turnTaken, int points) {
-        if (currentPhase.ordinal() < Phase.IN_PROGRESS.ordinal()) {
-            // Ignore ready-room churn; only show in-game events.
-            lastTurnTakenByPlayer.put(playerId, turnTaken);
-            lastPointsByPlayer.put(playerId, points);
-            return;
-        }
-
-        Boolean previousTurnTaken = lastTurnTakenByPlayer.put(playerId, turnTaken);
-        if (turnTaken && (previousTurnTaken == null || !previousTurnTaken)) {
-            appendEvent("[Turn] " + getPlayerLabel(playerId) + " completed their turn.");
-        }
-
-        Integer previousPoints = lastPointsByPlayer.put(playerId, points);
-        if (previousPoints == null || previousPoints.intValue() != points) {
-            appendEvent("[Points] " + getPlayerLabel(playerId) + " now has " + points + " point(s).");
-        }
-    }
-
-    @Override
-    public void onAllPlayerStatusesReset() {
-        lastTurnTakenByPlayer.clear();
-        lastPointsByPlayer.clear();
+    public void onPlayerPointsChanged(long playerId, int points) {
+        appendEvent("[Points] " + getPlayerLabel(playerId) + " now has " + points + " point(s).");
     }
 
     private void updateCurrentTurnVisibility() {
-        boolean showCurrentTurn = currentPhase.ordinal() > Phase.READY.ordinal();
+        boolean showCurrentTurn = Client.INSTANCE.getCurrentGamePhase().ordinal() > Phase.READY.ordinal();
         currentTurnLabel.setVisible(showCurrentTurn);
         turnValue.setVisible(showCurrentTurn);
     }
 
     private String getPlayerLabel(long playerId) {
-        User user = Client.INSTANCE.getKnownUsersSnapshot().get(playerId);
-        if (user == null) {
-            return "Player #" + playerId;
-        }
-        return user.getDisplayName();
+        return Client.INSTANCE.getUserDisplayName(playerId);
     }
 }

@@ -22,7 +22,6 @@ public class ChatGameView extends JPanel implements IGameFlowEvents {
     private final GameView gameView;
     private final JSplitPane chatUserSplit;
     private final JSplitPane mainSplit;
-    private Phase currentPhase = Phase.INACTIVE;
 
     public enum GamePaneVisibilityMode {
         AUTO,
@@ -33,11 +32,11 @@ public class ChatGameView extends JPanel implements IGameFlowEvents {
     private GamePaneVisibilityMode visibilityMode = GamePaneVisibilityMode.AUTO;
 
     // Outer split: game vs (chat + users). Inner split: chat vs users.
-    public ChatGameView(GameView gameView, UserListView userListView) {
+    public ChatGameView() {
         super(new BorderLayout(8, 8));
-        this.gameView = gameView;
+        this.gameView = new GameView(Client.INSTANCE);
         ChatView chatView = new ChatView();
-
+        UserListView userListView = new UserListView();
         chatUserSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, chatView, userListView);
         chatUserSplit.setResizeWeight(CHAT_USER_SPLIT_PERCENT);
         chatUserSplit.setDividerLocation(CHAT_USER_SPLIT_PERCENT);
@@ -62,8 +61,13 @@ public class ChatGameView extends JPanel implements IGameFlowEvents {
 
         add(mainSplit, BorderLayout.CENTER);
 
-        Client.INSTANCE.registerCallback(this);
         applyPhaseLayout();
+    }
+
+    @Override
+    public void addNotify() {
+        super.addNotify();
+        Client.INSTANCE.registerCallback(this);
     }
 
     @Override
@@ -74,7 +78,6 @@ public class ChatGameView extends JPanel implements IGameFlowEvents {
 
     @Override
     public void onGamePhaseUpdated(Phase phase) {
-        currentPhase = phase == null ? Phase.INACTIVE : phase;
         SwingUtilities.invokeLater(this::applyPhaseLayout);
     }
 
@@ -93,6 +96,7 @@ public class ChatGameView extends JPanel implements IGameFlowEvents {
     }
 
     public boolean isGameVisible() {
+        Phase currentPhase = Client.INSTANCE.getCurrentGamePhase();
         switch (visibilityMode) {
             case FORCE_SHOW:
                 return true;

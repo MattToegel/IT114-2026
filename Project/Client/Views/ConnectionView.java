@@ -12,6 +12,9 @@ import javax.swing.JPanel;
 import javax.swing.JTextField;
 import javax.swing.border.EmptyBorder;
 
+import Project.Common.ValidationUtils;
+import Project.Exceptions.ValidationException;
+
 /**
  * Initial connection form for collecting host and port before user details.
  */
@@ -61,9 +64,13 @@ public class ConnectionView extends JPanel {
             return;
         }
         try {
+            ValidationUtils.requireNotBlank(host, "Host is required.");
             int port = Integer.parseInt(portText);
+            ValidationUtils.requireTrue(port > 0 && port <= 65535, "Port must be between 1 and 65535.");
             clearError();
             onNext.accept(host, port);
+        } catch (ValidationException e) {
+            setError(e.getMessage());
         } catch (NumberFormatException e) {
             setError("Port must be a number.");
         }

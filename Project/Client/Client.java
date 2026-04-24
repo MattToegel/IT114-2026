@@ -5,6 +5,7 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
@@ -98,27 +99,23 @@ public enum Client implements IClientCommands {
     public void unregisterCallback(IClientEvents callback) {
         uiCallbacks.remove(callback);
     }
-
-    public synchronized Map<Long, User> getKnownUsersSnapshot() {
+    public String getUserDisplayName(long clientId){
+        User user = knownUsers.get(clientId);
+        return user != null ? user.getDisplayName() : "Unknown";
+    }
+    
+    private synchronized Map<Long, User> getKnownUsersSnapshot() {
         ConcurrentHashMap<Long, User> snapshot = new ConcurrentHashMap<>();
         knownUsers.forEach((id, user) -> {
-            User copy = new User(user.getClientId(), user.getClientName());
-            copy.setReady(user.isReady());
-            copy.setTurnTaken(user.isTurnTaken());
-            copy.setPoints(user.getPoints());
-            copy.setCardIds(user.getCardIds());
-            snapshot.put(id, copy);
+            // Copy before exposing to callers so UI code can't mutate client-owned state.
+            snapshot.put(id, User.copyOf(user));
         });
         return snapshot;
     }
 
-    public synchronized User getMyUserSnapshot() {
-        User copy = new User(myUser.getClientId(), myUser.getClientName());
-        copy.setReady(myUser.isReady());
-        copy.setTurnTaken(myUser.isTurnTaken());
-        copy.setPoints(myUser.getPoints());
-        copy.setCardIds(myUser.getCardIds());
-        return copy;
+    private synchronized User getMyUserSnapshot() {
+        // Return a snapshot copy to avoid leaking the mutable local-user reference.
+        return User.copyOf(myUser);
     }
 
     public synchronized long getLocalPlayerId() {
@@ -129,8 +126,57 @@ public enum Client implements IClientCommands {
         return myUser.getClientId() == clientId;
     }
 
+    public synchronized boolean hasLocalPlayer() {
+        try {
+            ValidationUtils.requireTrue(
+                    myUser.getClientId() != Constants.DEFAULT_CLIENT_ID,
+                    "Local player is not initialized.");
+            return true;
+        } catch (ValidationException e) {
+            return false;
+        }
+    }
+
+    public synchronized boolean isLocalPlayerReady() {
+        try {
+            ValidationUtils.requireParticipating(myUser.isReady());
+            return true;
+        } catch (ValidationException e) {
+            return false;
+        }
+    }
+
+    public synchronized List<Integer> getLocalCardIdsSnapshot() {
+        return new ArrayList<>(myUser.getCardIds());
+    }
+
+    public synchronized boolean isLocalPlayerTurnTaken() {
+        return myUser.isTurnTaken();
+    }
+
+    public synchronized boolean canLocalPlayerPlayCardNow() {
+        try {
+            ValidationUtils.requireTrue(
+                    myUser.getClientId() != Constants.DEFAULT_CLIENT_ID,
+                    "Local player is not initialized.");
+            ValidationUtils.requireParticipating(myUser.isReady());
+            ValidationUtils.requirePhase(currentGamePhase, Phase.IN_PROGRESS);
+            ValidationUtils.requireTurnNotTaken(myUser.isTurnTaken());
+            ValidationUtils.requireCurrentPlayer(currentTurnClientId, myUser.getClientId());
+            return true;
+        } catch (ValidationException e) {
+            return false;
+        }
+    }
+
+    public synchronized int getCardMod(int cardId) {
+        Card card = cardCatalog.get(cardId);
+        return card == null ? 0 : card.getMod();
+    }
+
     public Phase getCurrentGamePhase() {
-        return currentGamePhase;
+        // Defensive fallback ensures UI callbacks never receive a null phase.
+        return currentGamePhase == null ? Phase.INACTIVE : currentGamePhase;
     }
 
     public long getCurrentTurnClientId() {
@@ -190,21 +236,11 @@ public enum Client implements IClientCommands {
         passToUiCallbacks(IPlayerEvents.class, callback -> callback.onPlayersUpdated(players));
     }
 
-    private void emitUiLocalPlayerStatusUpdated() {
-        User localPlayer = getMyUserSnapshot();
-        passToUiCallbacks(IPlayerStatusEvents.class, callback -> callback.onLocalPlayerStatusUpdated(localPlayer));
-    }
-
     private void emitUiPlayerStatusUpdated(User user) {
         if (user == null) {
             return;
         }
-        passToUiCallbacks(IPlayerStatusEvents.class,
-                callback -> callback.onPlayerStatusUpdated(
-                        user.getClientId(),
-                        user.isReady(),
-                        user.isTurnTaken(),
-                        user.getPoints()));
+        passToUiCallbacks(IPlayerStatusEvents.class, callback -> callback.onPlayerStatusUpdated(user));
     }
 
     private void emitUiAllPlayerStatusesReset() {
@@ -233,6 +269,14 @@ public enum Client implements IClientCommands {
         String currentTurnName = getCurrentTurnDisplayName();
         passToUiCallbacks(IGameFlowEvents.class,
                 callback -> callback.onCurrentTurnUpdated(currentTurnId, currentTurnName));
+    }
+
+    private void emitUiPlayerTurnCompleted(long playerId) {
+        passToUiCallbacks(IGameFlowEvents.class, callback -> callback.onPlayerTurnCompleted(playerId));
+    }
+
+    private void emitUiPlayerPointsChanged(long playerId, int points) {
+        passToUiCallbacks(IGameFlowEvents.class, callback -> callback.onPlayerPointsChanged(playerId, points));
     }
 
     private void emitUiLocalGridUpdated() {
@@ -334,7 +378,7 @@ public enum Client implements IClientCommands {
     }
 
     @Override
-    public void sendReadySignal() {
+    public void sendReadySignal() throws ValidationException {
         try {
             sendReady();
         } catch (IOException e) {
@@ -344,7 +388,7 @@ public enum Client implements IClientCommands {
     }
 
     @Override
-    public void sendCardAction(int cardId, int x, int y) {
+    public void sendCardAction(int cardId, int x, int y) throws ValidationException {
         try {
             sendCardAction(String.format("%d %d %d", cardId, x, y));
         } catch (IOException e) {
@@ -438,7 +482,11 @@ public enum Client implements IClientCommands {
                 }
                 return true;
             case READY:
-                sendReady();
+                try {
+                    sendReady();
+                } catch (ValidationException e) {
+                    LoggerUtil.INSTANCE.warning(TextFX.colorize(e.getMessage(), Color.YELLOW));
+                }
                 return true;
             case VALIDATE_CLIENT:
                 isLocalValidationEnabled = !isLocalValidationEnabled;
@@ -451,7 +499,11 @@ public enum Client implements IClientCommands {
                 return true;
             case CARD:
                 String cardArgs = text.replaceFirst("/card", "").trim();
-                sendCardAction(cardArgs);
+                try {
+                    sendCardAction(cardArgs);
+                } catch (ValidationException e) {
+                    LoggerUtil.INSTANCE.warning(TextFX.colorize(e.getMessage(), Color.YELLOW));
+                }
                 return true;
             case HAND:
                 printLocalHand();
@@ -500,7 +552,7 @@ public enum Client implements IClientCommands {
     // end region for misc
 
     // Start region for send*() methods ===================================
-    private void sendCardAction(String args) throws IOException {
+    private void sendCardAction(String args) throws IOException, ValidationException {
         String[] parts = args == null ? new String[0] : args.trim().split("\\s+");
         if (parts.length != 3) {
             LoggerUtil.INSTANCE.warning("Usage: /card <cardId> <x> <y>");
@@ -520,18 +572,14 @@ public enum Client implements IClientCommands {
         }
 
         if (isLocalValidationEnabled) {
-            try {
-                ValidationUtils.requirePhase(currentGamePhase, Phase.IN_PROGRESS);
-                ValidationUtils.requireParticipating(myUser.isReady());
-                ValidationUtils.requireTurnNotTaken(myUser.isTurnTaken());
-                ValidationUtils.requireValidCardId(cardId);
-                ValidationUtils.requireCardInHand(myUser.getCardIds(), cardId);
-                if (localGrid != null) {
-                    ValidationUtils.requireInBounds(x, y, localGrid.getWidth(), localGrid.getHeight());
-                }
-            } catch (ValidationException e) {
-                LoggerUtil.INSTANCE.warning(TextFX.colorize(e.getMessage(), Color.YELLOW));
-                return;
+            ValidationUtils.requirePhase(currentGamePhase, Phase.IN_PROGRESS);
+            ValidationUtils.requireParticipating(myUser.isReady());
+            ValidationUtils.requireTurnNotTaken(myUser.isTurnTaken());
+            ValidationUtils.requireCurrentPlayer(currentTurnClientId, myUser.getClientId());
+            ValidationUtils.requireValidCardId(cardId);
+            ValidationUtils.requireCardInHand(myUser.getCardIds(), cardId);
+            if (localGrid != null) {
+                ValidationUtils.requireInBounds(x, y, localGrid.getWidth(), localGrid.getHeight());
             }
         }
 
@@ -546,15 +594,10 @@ public enum Client implements IClientCommands {
     /**
      * Sends a ready-check action to the server.
      */
-    private void sendReady() throws IOException {
+    private void sendReady() throws IOException, ValidationException {
         if (isLocalValidationEnabled) {
-            try {
-                ValidationUtils.requirePhaseAtMost(currentGamePhase, Phase.READY);
-                ValidationUtils.requireNotAlreadyReady(myUser.isReady());
-            } catch (ValidationException e) {
-                LoggerUtil.INSTANCE.warning(TextFX.colorize(e.getMessage(), Color.YELLOW));
-                return;
-            }
+            ValidationUtils.requirePhaseAtMost(currentGamePhase, Phase.READY);
+            ValidationUtils.requireNotAlreadyReady(myUser.isReady());
         }
 
         Payload payload = new Payload();
@@ -759,7 +802,7 @@ public enum Client implements IClientCommands {
 
         myUser.setCardIds(chp.getCardIds());
         LoggerUtil.INSTANCE.info(TextFX.colorize("[Game] Your hand: " + formatHandForDisplay(), Color.GREEN));
-        emitUiLocalPlayerStatusUpdated();
+        emitUiPlayerStatusUpdated(getMyUserSnapshot());
         emitUiLocalHandUpdated();
     }
 
@@ -883,6 +926,7 @@ public enum Client implements IClientCommands {
         if (user == null) {
             return;
         }
+        int previousPoints = user.getPoints();
         user.setPoints(points); // updated directly from trusted server
         if (currentGamePhase.ordinal() >= Phase.IN_PROGRESS.ordinal()) {
             // only print point updates during the game; before the game starts, points may
@@ -890,10 +934,14 @@ public enum Client implements IClientCommands {
             LoggerUtil.INSTANCE.info(TextFX.colorize(
                     String.format("%s now has %d points", user.getDisplayName(), points),
                     Color.YELLOW));
+            // Client is authoritative for status transitions; emit refined UI event once.
+            if (previousPoints != points) {
+                emitUiPlayerPointsChanged(user.getClientId(), points);
+            }
         }
         emitUiPlayerStatusUpdated(user);
         if (isLocalPlayer(user.getClientId())) {
-            emitUiLocalPlayerStatusUpdated();
+            emitUiPlayerStatusUpdated(getMyUserSnapshot());
         }
 
     }
@@ -910,17 +958,24 @@ public enum Client implements IClientCommands {
             knownUsers.forEach((key, user) -> user.setTurnTaken(false));
             LoggerUtil.INSTANCE.info(TextFX.colorize("All users' turn status reset", Color.YELLOW));
             emitUiAllPlayerStatusesReset();
-            emitUiLocalPlayerStatusUpdated();
+            emitUiPlayerStatusUpdated(getMyUserSnapshot());
             return;
         }
         User user = knownUsers.get(bp.getClientId());
         if (user == null) {
             return;
         }
+        boolean previousTurnTaken = user.isTurnTaken();
         user.setTurnTaken(bp.getValue());
+        if (currentGamePhase.ordinal() >= Phase.IN_PROGRESS.ordinal()
+                && bp.getValue()
+                && !previousTurnTaken) {
+            // Emit refined UI event for the false->true turn-complete transition.
+            emitUiPlayerTurnCompleted(user.getClientId());
+        }
         emitUiPlayerStatusUpdated(user);
         if (isLocalPlayer(user.getClientId())) {
-            emitUiLocalPlayerStatusUpdated();
+            emitUiPlayerStatusUpdated(getMyUserSnapshot());
         }
         emitUiCurrentTurnUpdated();
         // Uncomment for debugging local state synchronization from server turn-status
@@ -947,7 +1002,7 @@ public enum Client implements IClientCommands {
             cardCatalog.clear();
             LoggerUtil.INSTANCE.info(TextFX.colorize("All users' ready status reset", Color.YELLOW));
             emitUiAllPlayerStatusesReset();
-            emitUiLocalPlayerStatusUpdated();
+            emitUiPlayerStatusUpdated(getMyUserSnapshot());
             emitUiGamePhaseUpdated();
             emitUiCurrentTurnUpdated();
             emitUiLocalGridUpdated();
@@ -962,7 +1017,7 @@ public enum Client implements IClientCommands {
         user.setReady(bp.getValue());
         emitUiPlayerStatusUpdated(user);
         if (isLocalPlayer(user.getClientId())) {
-            emitUiLocalPlayerStatusUpdated();
+            emitUiPlayerStatusUpdated(getMyUserSnapshot());
         }
         // Uncomment for debugging local state synchronization from server ready-status
         // payloads.
@@ -1075,7 +1130,7 @@ public enum Client implements IClientCommands {
         knownUsers.put(assignedId, myUser);
         LoggerUtil.INSTANCE.info(TextFX.colorize("Connected", Color.GREEN));
         emitUiConnected();
-        emitUiLocalPlayerStatusUpdated();
+        emitUiPlayerStatusUpdated(getMyUserSnapshot());
         emitUiPlayersUpdated();
     }
     // End region for process*() methods ===================================

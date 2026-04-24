@@ -12,6 +12,9 @@ import javax.swing.JPanel;
 import javax.swing.JTextField;
 import javax.swing.border.EmptyBorder;
 
+import Project.Common.ValidationUtils;
+import Project.Exceptions.ValidationException;
+
 /**
  * User-details form that collects the display name and handles connect/back actions.
  */
@@ -59,9 +62,10 @@ public class UserDetailsView extends JPanel {
 
     private void handleConnectRequested(Consumer<String> connectAction) {
         String enteredUsername = userField.getText().trim();
-        if (enteredUsername.isEmpty()) {
-            userError.setText("Username must be provided");
-            userError.setVisible(true);
+        try {
+            ValidationUtils.requireNotBlank(enteredUsername, "Username must be provided");
+        } catch (ValidationException e) {
+            setError(e.getMessage());
             return;
         }
 

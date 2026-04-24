@@ -173,10 +173,12 @@ public enum Server {
                 && sender != null
                 && isGameServerActive()
                 && !gameServer.isActivePlayer(sender)) {
-            // Non-participant chat is multicast to other non-participants only.
+            // Non-participant chat is multicast to the non-participant group,
+            // including the sender so they receive server confirmation of their message.
             // Used to prevent non-participants from spoiling a game
             List<ServerThread> nonParticipants = getConnectedClientsSnapshot().stream()
-                    .filter(client -> client.getClientId() != sender.getClientId())
+                    // commented out so sender gets their own message back too
+                    // .filter(client -> client.getClientId() != sender.getClientId())
                     .filter(client -> !gameServer.isActivePlayer(client))
                     .collect(Collectors.toList());
 

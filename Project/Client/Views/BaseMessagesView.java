@@ -18,6 +18,8 @@ import javax.swing.JScrollPane;
 import javax.swing.ScrollPaneConstants;
 import javax.swing.SwingUtilities;
 
+import Project.Common.LoggerUtil;
+
 /**
  * Abstract shared message-feed base that handles append, wrapping, resize, and auto-scroll behavior.
  */
@@ -78,6 +80,7 @@ public abstract class BaseMessagesView extends JPanel {
     }
 
     private void addText(String htmlText) {
+        LoggerUtil.INSTANCE.info("Adding message: " + htmlText);
         JEditorPane textContainer = createMessageEditor(htmlText);
 
         JScrollPane parentScrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, messageArea);

@@ -39,9 +39,6 @@ public class ChatView extends BaseMessagesView implements IChatEvents, IConnecti
     // Main chat panel: scrollable history + message input.
     public ChatView() {
         super(OUTER_GAP, WIDTH_MARGIN, MIN_TEXT_WIDTH, MESSAGE_BOTTOM_INSET, MESSAGE_RIGHT_INSET);
-        // Register this panel to receive chat/connection callbacks.
-        Client.INSTANCE.registerCallback(this);
-
         JPanel controls = new JPanel(new BorderLayout(INNER_GAP, INNER_GAP));
 
         JPanel messageInput = new JPanel(new BorderLayout(INNER_GAP, INNER_GAP));
@@ -63,6 +60,13 @@ public class ChatView extends BaseMessagesView implements IChatEvents, IConnecti
         controls.add(messageInput, BorderLayout.SOUTH);
 
         add(controls, BorderLayout.SOUTH);
+    }
+
+    @Override
+    public void addNotify() {
+        super.addNotify();
+        // Re-register when Swing attaches this view again after a card/layout switch.
+        Client.INSTANCE.registerCallback(this);
     }
 
     @Override
@@ -92,12 +96,12 @@ public class ChatView extends BaseMessagesView implements IChatEvents, IConnecti
 
     @Override
     public void onConnected(User localUser) {
-        appendSystemMessage("Connected.");
+        onSystemMessageReceived("Connected.");
     }
 
     @Override
     public void onDisconnected() {
-        appendSystemMessage("Disconnected.");
+        onSystemMessageReceived("Disconnected.");
     }
 
     @Override

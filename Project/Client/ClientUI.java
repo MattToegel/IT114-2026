@@ -9,6 +9,7 @@ import javax.swing.ButtonGroup;
 import javax.swing.JMenu;
 import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
+import javax.swing.JOptionPane;
 import javax.swing.JRadioButtonMenuItem;
 import javax.swing.SwingUtilities;
 
@@ -16,10 +17,9 @@ import Project.Client.Interfaces.IConnectionEvents;
 import Project.Client.Views.ChatGameView;
 import Project.Client.Views.ChatGameView.GamePaneVisibilityMode;
 import Project.Client.Views.ConnectionView;
-import Project.Client.Views.GameView;
-import Project.Client.Views.UserListView;
 import Project.Client.Views.UserDetailsView;
 import Project.Common.User;
+import Project.Exceptions.ValidationException;
 
 public class ClientUI extends JFrame implements IConnectionEvents {
     private enum Screen {
@@ -42,8 +42,6 @@ public class ClientUI extends JFrame implements IConnectionEvents {
     private ConnectionView connectionView;
     private UserDetailsView userDetailsView;
     private ChatGameView chatGameView;
-    private GameView gameView;
-    private UserListView userListView;
 
     public ClientUI() {
         super("MT85 (change this) Client UI"); // replace with your UCID and remove the "(change this)" part
@@ -58,7 +56,13 @@ public class ClientUI extends JFrame implements IConnectionEvents {
         connectionMenu.add(disconnectItem);
         menuBar.add(connectionMenu);
 
-        startReadyCheckItem.addActionListener(event -> Client.INSTANCE.sendReadySignal());
+        startReadyCheckItem.addActionListener(event -> {
+            try {
+                Client.INSTANCE.sendReadySignal();
+            } catch (ValidationException e) {
+                JOptionPane.showMessageDialog(this, e.getMessage(), "Validation", JOptionPane.WARNING_MESSAGE);
+            }
+        });
 
         ButtonGroup gamePaneModeGroup = new ButtonGroup();
         gamePaneModeGroup.add(autoModeItem);
@@ -110,12 +114,9 @@ public class ClientUI extends JFrame implements IConnectionEvents {
                     } else {
                         userDetailsView.setError("Connection attempt failed. Check host/port and try again.");
                     }
-                });
+                });        
 
-        gameView = new GameView(Client.INSTANCE);
-        userListView = new UserListView();
-
-        chatGameView = new ChatGameView(gameView, userListView);
+        chatGameView = new ChatGameView();
 
         container.add(connectionView, Screen.CONNECTION.name());
         container.add(userDetailsView, Screen.USER.name());

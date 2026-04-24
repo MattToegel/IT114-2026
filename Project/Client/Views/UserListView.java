@@ -30,7 +30,6 @@ import Project.Common.User;
 public class UserListView extends JPanel implements IPlayerEvents, IPlayerStatusEvents, IGameFlowEvents {
     private final JPanel listArea = new JPanel(new GridBagLayout());
     private final HashMap<Long, UserListItem> userItemsMap = new HashMap<>();
-    private Phase currentPhase = Phase.INACTIVE;
 
     // Scrollable user list that reacts to player/game callbacks.
     public UserListView() {
@@ -41,8 +40,18 @@ public class UserListView extends JPanel implements IPlayerEvents, IPlayerStatus
                 ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
                 ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         add(scroll, BorderLayout.CENTER);
+    }
 
+    @Override
+    public void addNotify() {
+        super.addNotify();
         Client.INSTANCE.registerCallback(this);
+    }
+
+    @Override
+    public void removeNotify() {
+        Client.INSTANCE.unregisterCallback(this);
+        super.removeNotify();
     }
 
     // Rebuilds rows from a full membership snapshot (join/leave safe path).
@@ -91,48 +100,28 @@ public class UserListView extends JPanel implements IPlayerEvents, IPlayerStatus
         SwingUtilities.invokeLater(() -> {
             // Full snapshot update path (join/leave/reconnect scenarios).
             rebuildList(players);
+            refreshBadgeVisibility();
         });
     }
 
     // ---- IPlayerStatusEvents ----
 
     @Override
-    public void onLocalPlayerStatusUpdated(User localPlayer) {
-        if (localPlayer == null) {
+    public void onPlayerStatusUpdated(User user) {
+        if (user == null) {
             return;
         }
         SwingUtilities.invokeLater(() -> {
-            // Fast local-row patch avoids rebuilding whole list for frequent updates.
-            UserListItem item = userItemsMap.get(localPlayer.getClientId());
-            if (item != null) {
-                item.setReady(localPlayer.isReady());
-                item.setTurnTaken(localPlayer.isTurnTaken());
-                item.setPoints(localPlayer.getPoints());
-            }
-        });
-    }
-
-    @Override
-    public void onPlayerStatusUpdated(long playerId, boolean ready, boolean turnTaken, int points) {
-        SwingUtilities.invokeLater(() -> {
             // Status changes are frequent; patch only the affected row.
-            UserListItem item = userItemsMap.get(playerId);
-            if (item != null) {
-                item.setReady(ready);
-                item.setTurnTaken(turnTaken);
-                item.setPoints(points);
-            }
+            UserListItem item = userItemsMap.get(user.getClientId());
+            applyUserStatus(item, user);
         });
     }
 
     @Override
     public void onGamePhaseUpdated(Phase phase) {
         SwingUtilities.invokeLater(() -> {
-            currentPhase = phase == null ? Phase.INACTIVE : phase;
-            boolean showBadges = shouldShowBadges();
-            for (UserListItem item : userItemsMap.values()) {
-                item.setStatusBadgesVisible(showBadges);
-            }
+            refreshBadgeVisibility();
         });
     }
 
@@ -145,15 +134,36 @@ public class UserListView extends JPanel implements IPlayerEvents, IPlayerStatus
     public void onAllPlayerStatusesReset() {
         SwingUtilities.invokeLater(() -> {
             for (UserListItem item : userItemsMap.values()) {
-                item.setReady(false);
-                item.setTurnTaken(false);
-                item.setPoints(0);
+                applyStatus(item, false, false, 0);
             }
         });
     }
 
     private boolean shouldShowBadges() {
         // Badges are gameplay-specific; hide in lobby/ready-room phases.
-        return currentPhase.ordinal() > Phase.READY.ordinal();
+        return Client.INSTANCE.getCurrentGamePhase().ordinal() > Phase.READY.ordinal();
+    }
+
+    private void refreshBadgeVisibility() {
+        boolean showBadges = shouldShowBadges();
+        for (UserListItem item : userItemsMap.values()) {
+            item.setStatusBadgesVisible(showBadges);
+        }
+    }
+
+    private void applyUserStatus(UserListItem item, User user) {
+        if (item == null || user == null) {
+            return;
+        }
+        applyStatus(item, user.isReady(), user.isTurnTaken(), user.getPoints());
+    }
+
+    private void applyStatus(UserListItem item, boolean ready, boolean turnTaken, int points) {
+        if (item == null) {
+            return;
+        }
+        item.setReady(ready);
+        item.setTurnTaken(turnTaken);
+        item.setPoints(points);
     }
 }

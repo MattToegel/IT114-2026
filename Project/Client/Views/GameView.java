@@ -4,7 +4,7 @@ import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
-import java.util.ArrayList;
+import java.awt.Component;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -21,18 +21,17 @@ import javax.swing.SwingConstants;
 import Project.Client.Client;
 import Project.Client.Interfaces.IConnectionEvents;
 import Project.Client.Interfaces.IGameBoardEvents;
-import Project.Client.Interfaces.IPlayerEvents;
 import Project.Client.Interfaces.IPlayerStatusEvents;
 import Project.Common.Card;
-import Project.Common.Constants;
 import Project.Common.Grid;
 import Project.Common.Phase;
 import Project.Common.User;
+import Project.Exceptions.ValidationException;
 
 /**
  * Main gameplay panel that shows phase-aware status, cards, grid actions, and game events.
  */
-public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents, IPlayerStatusEvents, IGameBoardEvents {
+public class GameView extends JPanel implements IConnectionEvents, IPlayerStatusEvents, IGameBoardEvents {
     private final Client client;
     private final JLabel selectionLabel = new JLabel("Select a card, then select a grid cell.");
     private final JPanel readyPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
@@ -45,11 +44,6 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents
     private static final String CARD_PLAY = "PLAY";
     private static final String CARD_EVALUATION = "EVALUATION";
 
-    private Map<Long, User> players = Map.of();
-    private Phase currentPhase = Phase.INACTIVE;
-    private long currentTurnClientId = Constants.DEFAULT_CLIENT_ID;
-    private User localPlayerFromGame;
-    private Map<Integer, Card> cardCatalog = Map.of();
     private Integer selectedCardId;
     private JButton[][] gridButtons = new JButton[0][0];
     private int gridWidth;
@@ -60,7 +54,6 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents
     public GameView(Client client) {
         super(new BorderLayout(6, 6));
         this.client = client;
-        this.client.registerCallback(this);
 
         setBorder(BorderFactory.createTitledBorder("Game"));
 
@@ -68,7 +61,13 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents
         status.setLayout(new BoxLayout(status, BoxLayout.Y_AXIS));
         // Single-line status/instruction area shown above the board.
         status.add(selectionLabel);
-        readyButton.addActionListener(event -> client.sendReadySignal());
+        readyButton.addActionListener(event -> {
+            try {
+                client.sendReadySignal();
+            } catch (ValidationException e) {
+                selectionLabel.setText(e.getMessage());
+            }
+        });
         readyPanel.add(readyButton);
         status.add(readyPanel);
 
@@ -106,6 +105,12 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents
     // ---- Incoming client events ----
 
     @Override
+    public void addNotify() {
+        super.addNotify();
+        client.registerCallback(this);
+    }
+
+    @Override
     public void removeNotify() {
         client.unregisterCallback(this);
         super.removeNotify();
@@ -113,108 +118,73 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents
 
     @Override
     public void onConnected(User localUser) {
+        // Connection lifecycle event keeps top status text in sync with session state.
         selectionLabel.setText("Connected. Complete the ready check to join the round.");
         refreshStatusOnly();
     }
 
     @Override
     public void onDisconnected() {
+        // Full reset on disconnect prevents stale in-progress UI state.
         resetView();
     }
 
     @Override
-    public void onPlayersUpdated(Map<Long, User> players) {
-        this.players = players;
-        refreshAll();
-    }
-
-    @Override
-    public void onLocalPlayerStatusUpdated(User localPlayer) {
-        this.localPlayerFromGame = copyUser(localPlayer);
-        if (localPlayerFromGame != null && localPlayerFromGame.getClientId() != Constants.DEFAULT_CLIENT_ID) {
-            upsertPlayer(localPlayerFromGame);
-        }
-        refreshAll();
-    }
-
-    @Override
-    public void onPlayerStatusUpdated(long playerId, boolean ready, boolean turnTaken, int points) {
-        User existing = players.get(playerId);
-        User updated = existing == null
-                ? new User(playerId, "Unknown")
-                : copyUser(existing);
-        updated.setReady(ready);
-        updated.setTurnTaken(turnTaken);
-        updated.setPoints(points);
-        upsertPlayer(updated);
-
-        if (client.isLocalPlayer(playerId) && localPlayerFromGame != null) {
-            localPlayerFromGame.setReady(ready);
-            localPlayerFromGame.setTurnTaken(turnTaken);
-            localPlayerFromGame.setPoints(points);
-        }
-
-        refreshAll();
+    public void onPlayerStatusUpdated(User user) {
+        // Status updates (ready/turn/points) affect button/grid interactivity.
+        refreshStateOnly();
     }
 
     @Override
     public void onAllPlayerStatusesReset() {
-        java.util.HashMap<Long, User> updatedPlayers = new java.util.HashMap<>();
-        players.forEach((id, player) -> {
-            User copy = copyUser(player);
-            copy.setReady(false);
-            copy.setTurnTaken(false);
-            copy.setPoints(0);
-            updatedPlayers.put(id, copy);
-        });
-        players = updatedPlayers;
-        if (localPlayerFromGame != null) {
-            localPlayerFromGame.setReady(false);
-            localPlayerFromGame.setTurnTaken(false);
-            localPlayerFromGame.setPoints(0);
-        }
-        refreshAll();
+        // Round/session reset also requires control/interactivity refresh.
+        refreshStateOnly();
     }
 
     @Override
     public void onGamePhaseUpdated(Phase phase) {
-        this.currentPhase = phase == null ? Phase.INACTIVE : phase;
-        refreshAll();
+        // Phase drives which content panel is shown and which controls are active.
+        refreshStateOnly();
     }
 
     @Override
     public void onCurrentTurnUpdated(long currentTurnClientId, String currentTurnDisplayName) {
-        this.currentTurnClientId = currentTurnClientId;
-        refreshAll();
+        // Turn ownership affects whether local actions should be enabled.
+        refreshStateOnly();
     }
 
     @Override
     public void onLocalGridUpdated(Grid localGrid) {
+        // Grid sync updates values/cell controls without rebuilding card rows.
         refreshStatusOnly();
         syncGridFromModel();
     }
 
     @Override
     public void onLocalHandUpdated(User localPlayer, Map<Integer, Card> cardCatalog) {
-        this.localPlayerFromGame = localPlayer;
-        this.cardCatalog = cardCatalog == null ? Map.of() : cardCatalog;
-        refreshAll();
+        // Hand sync requires rebuilding card rows from the latest local hand snapshot.
+        refreshForHandUpdate();
     }
 
     // ---- View refresh helpers ----
 
-    private void refreshAll() {
+    private void refreshStateOnly() {
+        refreshStatusOnly();
+        updateCardInteractivity();
+        updateGridInteractivity();
+    }
+
+    private void refreshForHandUpdate() {
         refreshStatusOnly();
         rebuildCards();
-        syncGridFromModel();
+        updateGridInteractivity();
     }
 
     private void refreshStatusOnly() {
-        User localPlayer = getLocalPlayer();
         updatePhaseVisibility();
-        updateReadyControls(localPlayer);
+        updateReadyControls();
 
-        switch (currentPhase) {
+        switch (client.getCurrentGamePhase()) {
             case INACTIVE:
                 selectionLabel.setText("Use Mark Ready to join the next round.");
                 break;
@@ -222,7 +192,7 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents
                 selectionLabel.setText("Waiting for ready check to complete.");
                 break;
             case IN_PROGRESS:
-                if (canLocalPlayerAct(localPlayer)) {
+                if (client.isLocalPlayerReady()) {
                     selectionLabel.setText("Select a card, then click a grid cell.");
                 } else {
                     selectionLabel.setText("Waiting for your turn.");
@@ -242,7 +212,7 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents
 
     private void updatePhaseVisibility() {
         CardLayout layout = (CardLayout) phaseContentPanel.getLayout();
-        switch (currentPhase) {
+        switch (client.getCurrentGamePhase()) {
             case READY:
             case IN_PROGRESS:
                 layout.show(phaseContentPanel, CARD_PLAY);
@@ -256,9 +226,10 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents
         }
     }
 
-    private void updateReadyControls(User localPlayer) {
+    private void updateReadyControls() {
+        Phase currentPhase = client.getCurrentGamePhase();
         boolean beforeGameplay = currentPhase.ordinal() <= Phase.READY.ordinal();
-        boolean localReady = localPlayer != null && localPlayer.isReady();
+        boolean localReady = client.isLocalPlayerReady();
         readyPanel.setVisible(beforeGameplay);
         readyButton.setEnabled(beforeGameplay && !localReady);
         readyButton.setText(localReady ? "Ready" : "Mark Ready");
@@ -267,10 +238,9 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents
     // ---- Renderers for interactive areas ----
 
     private void rebuildCards() {
-        User localPlayer = getLocalPlayer();
-        boolean canPlay = canLocalPlayerAct(localPlayer);
+        boolean canPlay = client.canLocalPlayerPlayCardNow();
         cardsPanel.removeAll();
-        List<Integer> cardIds = localPlayer == null ? List.of() : new ArrayList<>(localPlayer.getCardIds());
+        List<Integer> cardIds = client.getLocalCardIdsSnapshot();
         cardIds.sort(Comparator.naturalOrder());
 
         if (cardIds.isEmpty()) {
@@ -285,8 +255,7 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents
         }
 
         for (int cardId : cardIds) {
-            Card card = cardCatalog.get(cardId);
-            int mod = card == null ? 0 : card.getMod();
+            int mod = client.getCardMod(cardId);
             String label = String.format("Card %d (%s%d)", cardId, mod >= 0 ? "+" : "", mod);
             JButton cardButton = new JButton(label);
             cardButton.setHorizontalAlignment(SwingConstants.LEFT);
@@ -357,9 +326,17 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents
         revalidate();
     }
 
+    private void updateCardInteractivity() {
+        boolean canPlay = client.canLocalPlayerPlayCardNow();
+        for (Component component : cardsPanel.getComponents()) {
+            if (component instanceof JButton) {
+                component.setEnabled(canPlay);
+            }
+        }
+    }
+
     private void updateGridInteractivity() {
-        User localPlayer = getLocalPlayer();
-        boolean cellsEnabled = canLocalPlayerAct(localPlayer) && selectedCardId != null;
+        boolean cellsEnabled = client.canLocalPlayerPlayCardNow() && selectedCardId != null;
         for (int y = 0; y < gridButtons.length; y++) {
             for (int x = 0; x < gridButtons[y].length; x++) {
                 gridButtons[y][x].setEnabled(cellsEnabled);
@@ -368,17 +345,17 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents
     }
 
     private void applySelectedCard(int x, int y) {
-        User localPlayer = getLocalPlayer();
         if (selectedCardId == null) {
             selectionLabel.setText("Select a card before choosing a grid cell.");
             return;
         }
-        if (!canLocalPlayerAct(localPlayer)) {
-            selectionLabel.setText("You cannot play a card right now.");
+
+        try {
+            client.sendCardAction(selectedCardId, x, y);
+        } catch (ValidationException e) {
+            selectionLabel.setText(e.getMessage());
             return;
         }
-
-        client.sendCardAction(selectedCardId, x, y);
         // Optimistically update local instruction text while server processes action.
         selectionLabel.setText(String.format("Played card %d on cell (%d,%d).", selectedCardId, x, y));
         selectedCardId = null;
@@ -387,40 +364,6 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents
     }
 
     // ---- Local helper utilities ----
-
-    private boolean canLocalPlayerAct(User localPlayer) {
-        return localPlayer != null
-                && currentPhase == Phase.IN_PROGRESS
-                && localPlayer.isReady()
-                && !localPlayer.isTurnTaken()
-                && currentTurnClientId == localPlayer.getClientId();
-    }
-
-    private User getLocalPlayer() {
-        User localFromPlayers = players.get(client.getLocalPlayerId());
-        if (localFromPlayers != null) {
-            return localFromPlayers;
-        }
-        return localPlayerFromGame;
-    }
-
-    private void upsertPlayer(User player) {
-        java.util.HashMap<Long, User> updatedPlayers = new java.util.HashMap<>(players);
-        updatedPlayers.put(player.getClientId(), copyUser(player));
-        players = updatedPlayers;
-    }
-
-    private User copyUser(User source) {
-        if (source == null) {
-            return null;
-        }
-        User copy = new User(source.getClientId(), source.getClientName());
-        copy.setReady(source.isReady());
-        copy.setTurnTaken(source.isTurnTaken());
-        copy.setPoints(source.getPoints());
-        copy.setCardIds(source.getCardIds());
-        return copy;
-    }
 
     private JPanel createCenteredPhasePanel(String message) {
         JPanel panel = new JPanel(new BorderLayout());
@@ -431,11 +374,6 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents
 
     private void resetView() {
         // Local UI reset for disconnect/inactive states.
-        players = Map.of();
-        currentPhase = Phase.INACTIVE;
-        currentTurnClientId = Constants.DEFAULT_CLIENT_ID;
-        localPlayerFromGame = null;
-        cardCatalog = Map.of();
         selectedCardId = null;
         gridButtons = new JButton[0][0];
         gridWidth = 0;

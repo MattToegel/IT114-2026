@@ -19,6 +19,18 @@ public class User {
         this.clientName = clientName;
     }
 
+    public static User copyOf(User source) {
+        if (source == null) {
+            return null;
+        }
+        User copy = new User(source.getClientId(), source.getClientName());
+        copy.setReady(source.isReady());
+        copy.setTurnTaken(source.isTurnTaken());
+        copy.setPoints(source.getPoints());
+        copy.setCardIds(source.getCardIds());
+        return copy;
+    }
+
     /**
      * @return the clientId
      */
