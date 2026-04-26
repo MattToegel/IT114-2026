@@ -6,21 +6,27 @@ import java.awt.FlowLayout;
 
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
+import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.SwingConstants;
 
+import Project.Client.Client;
 import Project.Common.User;
 
 /**
  * Single user row component with display name and compact ready/turn/points badges.
  */
 public class UserListItem extends JPanel {
+    private static final Color NORMAL_TEXT_COLOR = Color.BLACK;
+    private static final Color AWAY_TEXT_COLOR = Color.GRAY;
+
     private final JLabel nameLabel = new JLabel();
     // Compact badges to reduce width pressure in narrow user-list panes.
     private final JLabel readyBadge = createBadge("R", Color.GREEN, Color.BLACK);
     private final JLabel turnBadge = createBadge("T", Color.YELLOW, Color.BLACK);
     private final JLabel pointsBadge = createBadge("PTS 0", Color.CYAN, Color.BLACK);
+    private final JButton awayButton = new JButton("Away");
     private final JPanel statusRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
 
     public UserListItem() {
@@ -42,6 +48,17 @@ public class UserListItem extends JPanel {
         statusRow.setAlignmentX(LEFT_ALIGNMENT);
         add(statusRow);
 
+        awayButton.setFont(awayButton.getFont().deriveFont(10f));
+        awayButton.setVisible(false);
+        awayButton.addActionListener(e -> {
+            try {
+                Client.INSTANCE.sendAwayToggle();
+            } catch (Exception ignored) {
+                // Client handles user-facing error reporting.
+            }
+        });
+        add(awayButton);
+
         // Prevent rows from growing too tall while still allowing full-width expansion.
         setMaximumSize(new Dimension(Integer.MAX_VALUE, 64));
     }
@@ -59,7 +76,9 @@ public class UserListItem extends JPanel {
         nameLabel.setText(isMe ? display + " (you)" : display);
         setReady(user.isReady());
         setTurnTaken(user.isTurnTaken());
+        setAway(user.isAway());
         setPoints(user.getPoints());
+        awayButton.setVisible(isMe);
     }
 
     public void setReady(boolean ready) {
@@ -77,6 +96,14 @@ public class UserListItem extends JPanel {
     public void setStatusBadgesVisible(boolean visible) {
         // Phase-based visibility controlled by UserListView.
         statusRow.setVisible(visible);
+    }
+
+    public void setAway(boolean away) {
+        awayButton.setText(away ? "Back" : "Away");
+        nameLabel.setForeground(away ? AWAY_TEXT_COLOR : NORMAL_TEXT_COLOR);
+        readyBadge.setForeground(away ? AWAY_TEXT_COLOR : Color.BLACK);
+        turnBadge.setForeground(away ? AWAY_TEXT_COLOR : Color.BLACK);
+        pointsBadge.setForeground(away ? AWAY_TEXT_COLOR : Color.BLACK);
     }
 
     private static JLabel createBadge(String text, Color bg, Color fg) {

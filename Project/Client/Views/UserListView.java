@@ -60,7 +60,9 @@ public class UserListView extends JPanel implements IPlayerEvents, IPlayerStatus
         userItemsMap.clear();
 
         List<User> sorted = new ArrayList<>(players.values());
-        sorted.sort(Comparator.comparingLong(User::getClientId));
+        // sort by points
+        sorted.sort(Comparator.comparingInt(User::getPoints).reversed()
+                .thenComparing(User::getClientName));
 
         for (int i = 0; i < sorted.size(); i++) {
             User user = sorted.get(i);
@@ -114,7 +116,11 @@ public class UserListView extends JPanel implements IPlayerEvents, IPlayerStatus
         SwingUtilities.invokeLater(() -> {
             // Status changes are frequent; patch only the affected row.
             UserListItem item = userItemsMap.get(user.getClientId());
-            applyUserStatus(item, user);
+            if(item != null){
+                applyUserStatus(item, user);
+                item.setAway(user.isAway());
+            }
+
         });
     }
 

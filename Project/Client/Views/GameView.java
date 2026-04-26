@@ -2,9 +2,12 @@ package Project.Client.Views;
 
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
+import java.awt.Color;
+import java.awt.Cursor;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
 import java.awt.Component;
+import java.awt.Font;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -21,8 +24,10 @@ import javax.swing.SwingConstants;
 import Project.Client.Client;
 import Project.Client.Interfaces.IConnectionEvents;
 import Project.Client.Interfaces.IGameBoardEvents;
+import Project.Client.Interfaces.IPlayerEvents;
 import Project.Client.Interfaces.IPlayerStatusEvents;
 import Project.Common.Card;
+import Project.Common.Constants;
 import Project.Common.Grid;
 import Project.Common.Phase;
 import Project.Common.User;
@@ -31,7 +36,14 @@ import Project.Exceptions.ValidationException;
 /**
  * Main gameplay panel that shows phase-aware status, cards, grid actions, and game events.
  */
-public class GameView extends JPanel implements IConnectionEvents, IPlayerStatusEvents, IGameBoardEvents {
+public class GameView extends JPanel implements IConnectionEvents, IPlayerEvents, IPlayerStatusEvents, IGameBoardEvents {
+    private static final Color GRID_CHANGED_BG = new Color(255, 244, 179);
+    private static final Color GRID_CHANGED_ODD_BG = new Color(255, 220, 130);
+    private static final Color GRID_ODD_TEXT = new Color(170, 35, 35);
+    private static final Color CARD_SELECTED_BG = GRID_CHANGED_BG;
+    private static final Color CARD_SELECTED_BORDER = GRID_CHANGED_ODD_BG;
+    private static final Color CARD_UNSELECTED_BORDER = new Color(140, 140, 140);
+
     private final Client client;
     private final JLabel selectionLabel = new JLabel("Select a card, then select a grid cell.");
     private final JPanel readyPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
@@ -43,11 +55,22 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerStatus
     private final JPanel evaluationPanel = createCenteredPhasePanel("Evaluating round results...");
     private static final String CARD_PLAY = "PLAY";
     private static final String CARD_EVALUATION = "EVALUATION";
+    private static final String CARD_ID_KEY = "cardId";
+    private static final String CARD_BASE_LABEL_KEY = "cardBaseLabel";
+    private static final String CARD_DEFAULT_BG_KEY = "cardDefaultBg";
+    // Per-button last synced value.
+    private static final String CELL_VALUE_KEY = "cellValue";
+    // Per-button changed flag for current sync pass.
+    private static final String CELL_CHANGED_KEY = "cellChanged";
 
     private Integer selectedCardId;
     private JButton[][] gridButtons = new JButton[0][0];
+    private Color defaultGridCellBg;
+    private Color defaultGridCellFg;
+    private Font defaultGridCellFont;
     private int gridWidth;
     private int gridHeight;
+    private long lastTurnOwnerId = Constants.DEFAULT_CLIENT_ID;
 
     // Main game panel: status line + phase-aware center content.
     // READY and IN_PROGRESS use play content; EVALUATION uses evaluation content.
@@ -130,6 +153,13 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerStatus
     }
 
     @Override
+    public void onPlayersUpdated(Map<Long, User> players) {
+        // Join/leave can change the ready-count denominator and numerator without a
+        // per-player status event, so refresh the ready label from the latest roster.
+        refreshStatusOnly();
+    }
+
+    @Override
     public void onPlayerStatusUpdated(User user) {
         // Status updates (ready/turn/points) affect button/grid interactivity.
         refreshStateOnly();
@@ -149,6 +179,11 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerStatus
 
     @Override
     public void onCurrentTurnUpdated(long currentTurnClientId, String currentTurnDisplayName) {
+        // Turn handover is used as the boundary for clearing previous action highlights.
+        if (lastTurnOwnerId != currentTurnClientId) {
+            clearGridChangeHighlights();
+            lastTurnOwnerId = currentTurnClientId;
+        }
         // Turn ownership affects whether local actions should be enabled.
         refreshStateOnly();
     }
@@ -230,9 +265,13 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerStatus
         Phase currentPhase = client.getCurrentGamePhase();
         boolean beforeGameplay = currentPhase.ordinal() <= Phase.READY.ordinal();
         boolean localReady = client.isLocalPlayerReady();
+        int readyCount = client.getReadyPlayerCount();
+        int readyRequired = Constants.REQUIRE_PLAYERS;
+
         readyPanel.setVisible(beforeGameplay);
         readyButton.setEnabled(beforeGameplay && !localReady);
-        readyButton.setText(localReady ? "Ready" : "Mark Ready");
+        String label = localReady ? "Ready" : "Mark Ready";
+        readyButton.setText(String.format("%s (%d/%d)", label, readyCount, readyRequired));
     }
 
     // ---- Renderers for interactive areas ----
@@ -258,21 +297,21 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerStatus
             int mod = client.getCardMod(cardId);
             String label = String.format("Card %d (%s%d)", cardId, mod >= 0 ? "+" : "", mod);
             JButton cardButton = new JButton(label);
+            cardButton.putClientProperty(CARD_ID_KEY, cardId);
+            cardButton.putClientProperty(CARD_BASE_LABEL_KEY, label);
+            cardButton.putClientProperty(CARD_DEFAULT_BG_KEY, cardButton.getBackground());
             cardButton.setHorizontalAlignment(SwingConstants.LEFT);
             cardButton.setEnabled(canPlay);
-            cardButton.setSelected(selectedCardId != null && selectedCardId == cardId);
-            if (cardButton.isSelected()) {
-                cardButton.setText(label + " [selected]");
-            }
             cardButton.addActionListener(event -> {
                 // Selecting a card arms the grid click action.
                 selectedCardId = cardId;
                 selectionLabel.setText(String.format("Card %d selected. Choose a target cell.", cardId));
+                refreshCardSelectionStyles();
                 updateGridInteractivity();
-                refreshStatusOnly();
             });
             cardsPanel.add(cardButton);
         }
+        refreshCardSelectionStyles();
     }
 
     private void syncGridFromModel() {
@@ -296,9 +335,20 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerStatus
 
         for (int y = 0; y < gridHeight; y++) {
             for (int x = 0; x < gridWidth; x++) {
-                gridButtons[y][x].setText(String.valueOf(grid.getValue(x, y)));
+                int nextValue = grid.getValue(x, y);
+                JButton button = gridButtons[y][x];
+                // Compare against the value previously stored on this button.
+                Integer previousValue = (Integer) button.getClientProperty(CELL_VALUE_KEY);
+                boolean changed = previousValue == null || previousValue.intValue() != nextValue;
+                boolean alreadyChanged = Boolean.TRUE.equals(button.getClientProperty(CELL_CHANGED_KEY));
+                // Store latest per-cell state on the component.
+                // Keep prior highlights while this action's cells are still syncing in.
+                button.putClientProperty(CELL_CHANGED_KEY, changed || alreadyChanged);
+                button.putClientProperty(CELL_VALUE_KEY, nextValue);
+                button.setText(String.valueOf(nextValue));
             }
         }
+        refreshGridCellStyles();
         updateGridInteractivity();
         repaint();
     }
@@ -313,7 +363,16 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerStatus
 
         for (int y = 0; y < gridHeight; y++) {
             for (int x = 0; x < gridWidth; x++) {
-                JButton cellButton = new JButton(String.valueOf(grid.getValue(x, y)));
+                int initialValue = grid.getValue(x, y);
+                JButton cellButton = new JButton(String.valueOf(initialValue));
+                if (defaultGridCellBg == null) {
+                    defaultGridCellBg = cellButton.getBackground();
+                    defaultGridCellFg = cellButton.getForeground();
+                    defaultGridCellFont = cellButton.getFont();
+                }
+                // Initialize per-cell state on the button.
+                cellButton.putClientProperty(CELL_VALUE_KEY, initialValue);
+                cellButton.putClientProperty(CELL_CHANGED_KEY, false);
                 cellButton.setToolTipText(String.format("Cell (%d,%d)", x, y));
                 final int targetX = x;
                 final int targetY = y;
@@ -323,7 +382,46 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerStatus
                 gridPanel.add(cellButton);
             }
         }
+        refreshGridCellStyles();
         revalidate();
+    }
+
+    private void refreshGridCellStyles() {
+        if (gridButtons.length == 0) {
+            return;
+        }
+
+        for (int y = 0; y < gridHeight; y++) {
+            for (int x = 0; x < gridWidth; x++) {
+                JButton button = gridButtons[y][x];
+                // Style from per-cell state stored on each button.
+                Integer valueObject = (Integer) button.getClientProperty(CELL_VALUE_KEY);
+                int value = valueObject == null ? 0 : valueObject.intValue();
+                boolean isOdd = (value & 1) == 1;
+                boolean isChanged = Boolean.TRUE.equals(button.getClientProperty(CELL_CHANGED_KEY));
+
+                Color bg = isChanged
+                        ? (isOdd ? GRID_CHANGED_ODD_BG : GRID_CHANGED_BG)
+                        : defaultGridCellBg;
+                Color fg = isOdd ? GRID_ODD_TEXT : defaultGridCellFg;
+                Font font = isOdd
+                        ? defaultGridCellFont.deriveFont(Font.BOLD)
+                        : defaultGridCellFont;
+
+                button.setBackground(bg);
+                button.setForeground(fg);
+                button.setFont(font);
+            }
+        }
+    }
+
+    private void clearGridChangeHighlights() {
+        for (int y = 0; y < gridButtons.length; y++) {
+            for (int x = 0; x < gridButtons[y].length; x++) {
+                gridButtons[y][x].putClientProperty(CELL_CHANGED_KEY, false);
+            }
+        }
+        refreshGridCellStyles();
     }
 
     private void updateCardInteractivity() {
@@ -333,13 +431,40 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerStatus
                 component.setEnabled(canPlay);
             }
         }
+        refreshCardSelectionStyles();
+    }
+
+    private void refreshCardSelectionStyles() {
+        for (Component component : cardsPanel.getComponents()) {
+            if (!(component instanceof JButton)) {
+                continue;
+            }
+            JButton cardButton = (JButton) component;
+            Integer cardId = (Integer) cardButton.getClientProperty(CARD_ID_KEY);
+            String baseLabel = (String) cardButton.getClientProperty(CARD_BASE_LABEL_KEY);
+            Color defaultBg = (Color) cardButton.getClientProperty(CARD_DEFAULT_BG_KEY);
+            boolean isSelected = selectedCardId != null && selectedCardId.equals(cardId);
+
+            cardButton.setText(baseLabel);
+            cardButton.setBorder(isSelected
+                    ? BorderFactory.createLineBorder(CARD_SELECTED_BORDER, 2)
+                    : BorderFactory.createLineBorder(CARD_UNSELECTED_BORDER, 2));
+            cardButton.setBackground(isSelected ? CARD_SELECTED_BG : defaultBg);
+            cardButton.setOpaque(isSelected);
+        }
     }
 
     private void updateGridInteractivity() {
         boolean cellsEnabled = client.canLocalPlayerPlayCardNow() && selectedCardId != null;
         for (int y = 0; y < gridButtons.length; y++) {
             for (int x = 0; x < gridButtons[y].length; x++) {
-                gridButtons[y][x].setEnabled(cellsEnabled);
+                JButton button = gridButtons[y][x];
+                // Keep buttons enabled so Look and Feel (LAF) disabled-state painting doesn't override
+                // custom odd/change colors; action validity is enforced in sendCardAction().
+                button.setEnabled(true);
+                button.setCursor(cellsEnabled
+                        ? Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                        : Cursor.getDefaultCursor());
             }
         }
     }
@@ -359,6 +484,7 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerStatus
         // Optimistically update local instruction text while server processes action.
         selectionLabel.setText(String.format("Played card %d on cell (%d,%d).", selectedCardId, x, y));
         selectedCardId = null;
+        refreshCardSelectionStyles();
         updateGridInteractivity();
         refreshStatusOnly();
     }
@@ -376,6 +502,7 @@ public class GameView extends JPanel implements IConnectionEvents, IPlayerStatus
         // Local UI reset for disconnect/inactive states.
         selectedCardId = null;
         gridButtons = new JButton[0][0];
+        lastTurnOwnerId = Constants.DEFAULT_CLIENT_ID;
         gridWidth = 0;
         gridHeight = 0;
         selectionLabel.setText("Connect to the server to receive game data.");

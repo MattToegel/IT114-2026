@@ -8,6 +8,7 @@ public class User {
     private String clientName;
     private boolean ready;
     private boolean turnTaken;
+    private boolean away;
     private int points = 0;
     private final List<Integer> cardIds = new ArrayList<>();
 
@@ -26,6 +27,7 @@ public class User {
         User copy = new User(source.getClientId(), source.getClientName());
         copy.setReady(source.isReady());
         copy.setTurnTaken(source.isTurnTaken());
+        copy.setAway(source.isAway());
         copy.setPoints(source.getPoints());
         copy.setCardIds(source.getCardIds());
         return copy;
@@ -93,6 +95,14 @@ public class User {
         this.turnTaken = turnTaken;
     }
 
+    public boolean isAway() {
+        return away;
+    }
+
+    public void setAway(boolean away) {
+        this.away = away;
+    }
+
     public List<Integer> getCardIds() {
         return cardIds;
     }
@@ -123,6 +133,8 @@ public class User {
     public void resetGameState() {
         this.ready = false;
         this.turnTaken = false;
+        // away is session-scoped and is intentionally cleared on session reset.
+        this.away = false;
         this.points = 0;
         this.cardIds.clear();
     }

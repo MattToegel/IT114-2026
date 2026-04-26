@@ -146,6 +146,10 @@ public enum Client implements IClientCommands {
         }
     }
 
+    public synchronized int getReadyPlayerCount() {
+        return (int) knownUsers.values().stream().filter(User::isReady).count();
+    }
+
     public synchronized List<Integer> getLocalCardIdsSnapshot() {
         return new ArrayList<>(myUser.getCardIds());
     }
@@ -386,6 +390,17 @@ public enum Client implements IClientCommands {
             emitUiSystemMessage("Failed to send ready signal.");
         }
     }
+    @Override
+    public void sendAwayToggle() throws ValidationException {
+        try {
+            Payload payload = new Payload();
+            payload.setPayloadType(PayloadType.PLAYER_AWAY_STATUS);
+            sendToServer(payload);
+        } catch (IOException e) {
+            LoggerUtil.INSTANCE.warning("Failed to send away toggle: " + e.getMessage());
+            emitUiSystemMessage("Failed to send away toggle.");
+        }
+    }
 
     @Override
     public void sendCardAction(int cardId, int x, int y) throws ValidationException {
@@ -397,6 +412,8 @@ public enum Client implements IClientCommands {
         }
     }
 
+
+    
     @Override
     public void setDisplayName(String name) {
         if (ValidationUtils.isNullOrBlank(name)) {
@@ -754,6 +771,9 @@ public enum Client implements IClientCommands {
             case PLAYER_TURN_STATUS:
                 processTurnStatus(payload);
                 break;
+            case PLAYER_AWAY_STATUS:
+                processAwayStatus(payload);
+                break;
             case DISCONNECT: // server acknowledged this client's disconnect command; close connection
                 LoggerUtil.INSTANCE.info("Server acknowledged disconnect. Closing connection.");
                 closeServerConnection();
@@ -984,6 +1004,20 @@ public enum Client implements IClientCommands {
         // String.format("[Game] %s turnTaken=%s", user.getDisplayName(),
         // bp.getValue()),
         // Color.PURPLE));
+    }
+
+    private void processAwayStatus(Payload payload) {
+        if (!(payload instanceof BoolPayload)) {
+            LoggerUtil.INSTANCE.warning("Expected BoolPayload for PLAYER_AWAY_STATUS, got: " + payload.getClass());
+            return;
+        }
+        BoolPayload bp = (BoolPayload) payload;
+        User user = knownUsers.get(bp.getClientId());
+        if (user == null) {
+            return;
+        }
+        user.setAway(bp.getValue());
+        emitUiPlayerStatusUpdated(user);
     }
 
     private void processReadyStatus(Payload payload) {

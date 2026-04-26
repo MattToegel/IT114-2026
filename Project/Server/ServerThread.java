@@ -79,6 +79,9 @@ public class ServerThread extends BaseServerThread {
             case CARD_ACTION:
                 processCardAction(incoming);
                 break;
+            case PLAYER_AWAY_STATUS:
+                processAwayToggle(incoming);
+                break;
             default:
                 info("Received unsupported payload type: " + incoming.getPayloadType());
         }
@@ -100,6 +103,11 @@ public class ServerThread extends BaseServerThread {
     private void processReady(Payload incoming) {
         info("Processing ready payload");
         Server.INSTANCE.handleReady(this);
+    }
+
+    private void processAwayToggle(Payload incoming) {
+        info("Processing away toggle payload");
+        Server.INSTANCE.handleAwayToggle(this);
     }
 
     private void processDisconnect(Payload incoming) {
@@ -213,6 +221,14 @@ public class ServerThread extends BaseServerThread {
         payload.setPayloadType(PayloadType.PLAYER_READY_STATUS);
         payload.setClientId(clientId);
         payload.setValue(isReady);
+        return sendToClient(payload);
+    }
+
+    protected boolean sendAwayStatus(long clientId, boolean isAway) {
+        BoolPayload payload = new BoolPayload();
+        payload.setPayloadType(PayloadType.PLAYER_AWAY_STATUS);
+        payload.setClientId(clientId);
+        payload.setValue(isAway);
         return sendToClient(payload);
     }
 

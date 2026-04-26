@@ -27,4 +27,5 @@ public enum PayloadType {
     CARD_HAND_SYNC, // server syncs only the receiving client's hand card ids
     CARD_CATALOG_SYNC, // server syncs card definitions (id, mod) for client-side display
     GAME_TIMER_SYNC, // server syncs timer type and remaining seconds
+    PLAYER_AWAY_STATUS, // server syncs whether a user is away
 }

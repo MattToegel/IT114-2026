@@ -25,6 +25,7 @@ public final class ValidationUtils {
     private static final String DEFAULT_TURN_TAKEN_MESSAGE = "You already made your choice for this round.";
     private static final String DEFAULT_CURRENT_PLAYER_MESSAGE = "Please wait for your turn.";
     private static final String DEFAULT_TURN_OPTION_MESSAGE = "That turn option is not available.";
+    private static final String DEFAULT_AWAY_MESSAGE = "Player is away and cannot perform actions";
     private static final String DEFAULT_OUT_OF_BOUNDS_MESSAGE = "That coordinate is out of bounds.";
     private static final String DEFAULT_INVALID_CELL_VALUE_MESSAGE = "Cell value must be between 0 and 9.";
     private static final String DEFAULT_INVALID_CARD_ID_MESSAGE = "Please choose a valid card id.";
@@ -198,6 +199,16 @@ public final class ValidationUtils {
             throws DuplicateTurnChoiceException {
         if (turnTaken) {
             throw new DuplicateTurnChoiceException(errorMessage);
+        }
+    }
+
+    public static void requireNotAway(boolean away) throws ConditionValidationException {
+        requireNotAway(away, DEFAULT_AWAY_MESSAGE);
+    }
+
+    public static void requireNotAway(boolean away, String errorMessage) throws ConditionValidationException {
+        if (away) {
+            throw new ConditionValidationException(errorMessage);
         }
     }
 

@@ -107,6 +107,17 @@ public enum Server {
         }
     }
 
+    protected synchronized void handleAwayToggle(ServerThread sender) {
+        if (!isGameServerActive()) {
+            return;
+        }
+        try {
+            gameServer.handleAwayToggle(sender);
+        } catch (Exception e) {
+            LoggerUtil.INSTANCE.severe("Game server handleAwayToggle failed", e);
+        }
+    }
+
     /**
      * Called when a client requests to disconnect.
      */

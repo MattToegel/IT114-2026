@@ -42,9 +42,11 @@ public class ClientUI extends JFrame implements IConnectionEvents {
     private ConnectionView connectionView;
     private UserDetailsView userDetailsView;
     private ChatGameView chatGameView;
+    private final String baseWindowTitle;
 
     public ClientUI() {
         super("MT85 (change this) Client UI"); // replace with your UCID and remove the "(change this)" part
+        baseWindowTitle = getTitle();
         Client.INSTANCE.registerCallback(this);
         Client.INSTANCE.startNetworkOnly();
 
@@ -155,7 +157,9 @@ public class ClientUI extends JFrame implements IConnectionEvents {
             showScreen(Screen.CHAT);
             updateConnectedMenuState(true);
             if (localUser.getClientName() != null) {
-                setTitle("Client UI - " + localUser.getClientName());
+                setTitle(baseWindowTitle + " - " + localUser.getClientName());
+            } else {
+                setTitle(baseWindowTitle);
             }
         });
     }
@@ -165,7 +169,7 @@ public class ClientUI extends JFrame implements IConnectionEvents {
         onUiThread(() -> {
             showScreen(Screen.CONNECTION);
             updateConnectedMenuState(false);
-            setTitle("Client UI");
+            setTitle(baseWindowTitle);
         });
     }
 

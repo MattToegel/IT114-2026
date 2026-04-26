@@ -14,4 +14,6 @@ public interface IClientCommands {
     void sendCardAction(int cardId, int x, int y) throws ValidationException;
 
     void setDisplayName(String name);
+
+    void sendAwayToggle() throws ValidationException;
 }

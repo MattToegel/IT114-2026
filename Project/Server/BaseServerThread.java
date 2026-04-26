@@ -75,6 +75,14 @@ public abstract class BaseServerThread extends Thread {
         this.user.setReady(ready);
     }
 
+    public boolean isAway() {
+        return this.user.isAway();
+    }
+
+    public void setAway(boolean away) {
+        this.user.setAway(away);
+    }
+
     public boolean isTurnTaken() {
         return this.user.isTurnTaken();
     }
