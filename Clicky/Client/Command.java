@@ -14,6 +14,7 @@ public enum Command {
     TURN("/turn"), // @Deprecated
     VALIDATE_CLIENT("/togglecv"), // toggle client validation (for testing server-side validations)
     GUESS("/guess"), // example game action command
+    CLICK("/click"),
     ;
 
     private final String trigger;

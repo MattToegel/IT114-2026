@@ -99,6 +99,22 @@ public abstract class BaseServerThread extends Thread {
         this.user.setPoints(points);
     }
 
+    public void incrementClicks() {
+        this.user.incrementClicks();
+    }
+
+    public int getClicks() {
+        return this.user.getClicks();
+    }
+
+    public int getTotalClicks() {
+        return this.user.getTotalClicks();
+    }
+
+    public void setClicks(int clicks) {
+        this.user.setClicks(clicks);
+    }
+
     /**
      * Resets the game state for this player. <br>
      * Retains clientId/clientName references.

@@ -73,6 +73,9 @@ public class ServerThread extends BaseServerThread {
             case GUESS:
                 processGuess(incoming);
                 break;
+            case CLICK:
+                processClick(incoming);
+                break;
             default:
                 info("Received unsupported payload type: " + incoming.getPayloadType());
         }
@@ -80,6 +83,11 @@ public class ServerThread extends BaseServerThread {
 
     // Region used to hand off data to Server methods for processing
     // Start region for process*() methods ===================================
+    private void processClick(Payload incoming) {
+        info("Processing click payload");
+        Server.INSTANCE.handleClick(this);
+    }
+
     private void processGuess(Payload incoming) {
         info("Processing guess payload");
         Server.INSTANCE.handleGuess(this, incoming.getMessage());
@@ -127,6 +135,16 @@ public class ServerThread extends BaseServerThread {
     // End region for process*() methods ===================================
 
     // Start region for send*() methods ===================================
+
+    protected boolean sendClickCount(long clientId, int clicks) {
+        // repurposing PointsPayload to carry an int with a clientId
+        PointsPayload payload = new PointsPayload();
+        payload.setPayloadType(PayloadType.CLICK);
+        payload.setClientId(clientId);
+        payload.setPoints(clicks); // abusing the points field to send the click count since it provides a
+                                   // convenient int slot
+        return sendToClient(payload);
+    }
 
     protected boolean sendPlayerPoints(long clientId, int points) {
         PointsPayload payload = new PointsPayload();

@@ -140,13 +140,13 @@ public enum Client {
             case USERS: // client-side command
                 StringBuilder sb = new StringBuilder();
                 sb.append("Known clients:\n");
-                knownUsers.values().forEach(c -> sb.append(String.format("%s%s Ready:%s Turn:%s Points:%s Guess:%s\n",
+                knownUsers.values().forEach(c -> sb.append(String.format("%s%s Ready:%s Points:%s Clicks:%s\n",
                         c.getDisplayName(),
                         c.getClientId() == myUser.getClientId() ? " (you)" : "",
                         c.isReady() ? "[x]" : "[ ]",
-                        c.isTurnTaken() ? "[x]" : "[ ]",
+                        // c.isTurnTaken() ? "[x]" : "[ ]",
                         c.getPoints(),
-                        c.getGuess() == 0 ? "[?]" : c.getGuess())));
+                        c.getClicks())));
                 LoggerUtil.INSTANCE.info(TextFX.colorize(sb.toString().trim(), Color.CYAN));
                 return true;
             case REVERSE:
@@ -185,12 +185,32 @@ public enum Client {
                 String guessText = text.replaceFirst("/guess", "").trim();
                 sendGuess(guessText);
                 return true;
+            case CLICK:
+                sendClick();
+                return true;
             default:
                 return false;
         }
     }
 
     // Start region for send*() methods ===================================
+
+    private void sendClick() throws IOException {
+        if (isLocalValidationEnabled) {
+            try {
+                ValidationUtils.requirePhase(currentGamePhase, Phase.IN_PROGRESS);
+                ValidationUtils.requireParticipating(myUser.isReady());
+            } catch (ValidationException e) {
+                LoggerUtil.INSTANCE.warning(TextFX.colorize(e.getMessage(), Color.YELLOW));
+                return;
+            }
+        }
+
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.CLICK);
+        sendToServer(payload);
+    }
+
     /**
      * Sends a guess action to the server with the user's chosen option. <br>
      * Wraps the action in a Payload object with PayloadType.GUESS.
@@ -414,12 +434,35 @@ public enum Client {
             case POINTS:
                 processPoints(payload);
                 break;
+            case CLICK:
+                processClicksUpdate(payload);
+                break;
             default:
                 LoggerUtil.INSTANCE.warning("Received unhandled payload type: " + payload.getPayloadType());
         }
     }
 
     // Start region for process*() methods ===================================
+    private void processClicksUpdate(Payload p) {
+        if (!(p instanceof PointsPayload)) {
+            LoggerUtil.INSTANCE.warning("Expected PointsPayload for CLICK update, got: " + p.getClass());
+            return;
+        }
+        long clientId = p.getClientId();
+        int clicks = ((PointsPayload) p).getPoints(); // abusing the points field to receive the click count
+        User user = knownUsers.get(clientId);
+        if (user == null) {
+            return;
+        }
+        user.setClicks(clicks); // update local state with current click count
+        // good for testing but extremely spammy
+        /*
+         * LoggerUtil.INSTANCE.info(TextFX.colorize(
+         * String.format("%s now has %d clicks", user.getDisplayName(), clicks),
+         * Color.YELLOW));
+         */
+    }
+
     private void processPoints(Payload payload) {
         if (!(payload instanceof PointsPayload)) {
             LoggerUtil.INSTANCE.warning("Expected PointsPayload for POINTS confirmation, got: " + payload.getClass());

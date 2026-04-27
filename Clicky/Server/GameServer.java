@@ -1,8 +1,8 @@
 package Clicky.Server;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-import java.util.Random;
 
 import Clicky.Common.Constants;
 import Clicky.Common.LoggerUtil;
@@ -103,14 +103,18 @@ public class GameServer extends BaseGameServer {
         phase = Phase.IN_PROGRESS; // toggle from READY or EVALUATION
         broadcastCurrentPhase();
         for (ServerThread player : getActivePlayers()) {
+            // legacy since turns aren't recorded
             player.setTurnTaken(false);
             broadcastTurnStatus(player.getClientId(), false);
+            // reset clicks for the round
+            player.setClicks(0);
+            broadcastCurrentClicks(player);// tell clients to reset?
         }
         roundNumber++; // TODO: future lessons may sync this as number later for better UI visibility
         broadcastGameMessage("Round " + roundNumber + " started. You have " + ROUND_SECONDS + "s total.");
         // example round setup
-        hiddenNumber = new Random().nextInt(10) + 1;
-        broadcastGameMessage("A random number between 1-10 has been chosen, use /guess <value> to guess.");
+
+        broadcastGameMessage("A new round has started, use /click to click!");
 
         LoggerUtil.INSTANCE.info("[GameServer] onRoundStart() end");
         // onTurnStart(); this example doesn't use turns, all players take their
@@ -172,26 +176,31 @@ public class GameServer extends BaseGameServer {
         broadcastGameMessage("Round ended.");
 
         // example process round end logic; everyone gains a point for a correct guess
-        broadcastGameMessage("Evaluating guesses... The correct number was " + hiddenNumber);
+        broadcastGameMessage("Evaluating clicks for current round...");
         List<ServerThread> snapshot = new ArrayList<>(getActivePlayers());
+        Collections.sort(snapshot, (a, b) -> {
+            return Integer.compare(b.getClicks(), a.getClicks()); // sort descending by clicks
+        });
+        int maxPoints = 10;
+        StringBuilder sb = new StringBuilder();
+        sb.append("Current Round Scoreboard \n");
+        int i = 0;
         for (ServerThread player : snapshot) {
-            if (player.getGuess() == hiddenNumber) {
-                player.setPoints(player.getPoints() + 1);
-                // sync points to all
-                broadcastPlayerPoints(player);
-                // feedback
-                broadcastGameMessage(
-                        String.format("%s guessed correctly and gained a point!", player.getDisplayName()));
-                // can reset guess here
-                player.setGuess(0);
-            } else {
-                unicastGameMessage(player, "Your guess was incorrect.");
-            }
+            sb.append(String.format("%s - Clicks:%d\n",
+                    player.getDisplayName(),
+                    player.getClicks()));
+            // reward points with diminishing returns based on click rank for the round;
+            // ties will receive the same points
+            player.setPoints(player.getPoints() + Math.max(1, maxPoints - i));
+            i++;
+            broadcastPlayerPoints(player);
+            // broadcastCurrentClicks(player); // NOTE: this is done at end of "turn"
+            // action, no need to resync
         }
-
+        broadcastGameMessage(sb.toString());
         LoggerUtil.INSTANCE.info("[GameServer] onRoundEnd() end");
-        // TODO: add logic to determine if session should end or next round should
 
+        // logic to determine if session should end or next round should
         if (roundNumber >= 5) { // arbitrary end condition for example purposes
             onSessionEnd();
         } else {
@@ -212,12 +221,14 @@ public class GameServer extends BaseGameServer {
 
         List<ServerThread> snapshot = new ArrayList<>(getActivePlayers());
         // find user with highest score; they're the winner (uses stream api)
-        snapshot.stream().max((p1, p2) -> Integer.compare(p1.getPoints(), p2.getPoints())).ifPresentOrElse(winner -> {
-            broadcastGameMessage(String.format("Session ended: %s wins with %d points!", winner.getDisplayName(),
-                    winner.getPoints()));
-        }, () -> {
-            broadcastGameMessage("Session ended with no winner.");
-        });
+        snapshot.stream().max((p1, p2) -> Integer.compare(p1.getTotalClicks(), p2.getTotalClicks()))
+                .ifPresentOrElse(winner -> {
+                    broadcastGameMessage(
+                            String.format("Session ended: %s wins with %d clicks!", winner.getDisplayName(),
+                                    winner.getTotalClicks()));
+                }, () -> {
+                    broadcastGameMessage("Session ended with no winner.");
+                });
 
         // reset player data and sync changes to clients before clearing active players,
         // so that clients have a chance to update any relevant UI (like ready status)
@@ -298,6 +309,20 @@ public class GameServer extends BaseGameServer {
     }
 
     // start region for handle*() methods called by Server
+
+    protected void handleClick(ServerThread sender) {
+        try {
+            ValidationUtils.requireParticipating(isActivePlayer(sender));
+            ValidationUtils.requirePhase(phase, Phase.IN_PROGRESS);
+            // increment click on user
+            sender.incrementClicks();
+            broadcastCurrentClicks(sender);
+
+        } catch (ValidationException e) {
+            LoggerUtil.INSTANCE.warning("[GameServer] " + e.getMessage());
+            unicastGameMessage(sender, e.getMessage());
+        }
+    }
 
     protected void handleGuess(ServerThread sender, String guess) {
         try {
@@ -439,6 +464,7 @@ public class GameServer extends BaseGameServer {
             unicastReadyStatus(joiner, player.getClientId(), player.isReady());
             unicastTurnStatus(joiner, player.getClientId(), player.isTurnTaken());
             unicastPlayerPoints(joiner, player.getClientId(), player.getPoints());
+            unicastCurrentClicks(joiner, player.getClientId(), player.getClicks());
         }
     }
 
@@ -450,6 +476,21 @@ public class GameServer extends BaseGameServer {
     /** Sends the current game phase to a single client. */
     private void unicastCurrentPhase(ServerThread target) {
         Server.INSTANCE.unicast(target, serverThread -> serverThread.sendGamePhase(phase));
+    }
+
+    private void unicastCurrentClicks(ServerThread target, long clientId, int clicks) {
+        if (target == null) {
+            return;
+        }
+        Server.INSTANCE.unicast(target, serverThread -> serverThread.sendClickCount(clientId, clicks));
+    }
+
+    private void broadcastCurrentClicks(ServerThread player) {
+        if (player == null) {
+            return;
+        }
+        Server.INSTANCE.sendOrDisconnect(
+                serverThread -> serverThread.sendClickCount(player.getClientId(), player.getClicks()));
     }
 
     /** Notifies all connected clients of a player's ready status. */

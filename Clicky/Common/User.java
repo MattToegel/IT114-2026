@@ -7,6 +7,8 @@ public class User {
     private boolean turnTaken;
     private int guess = 0;// example user data
     private int points = 0;
+    private int clicks = 0;
+    private int totalClicks = 0;
 
     public User() {
     }
@@ -17,10 +19,50 @@ public class User {
     }
 
     /**
+     * @return the clicks
+     */
+    public int getClicks() {
+        return clicks;
+    }
+
+    /**
+     * @param clicks the clicks to set
+     */
+    public void setClicks(int clicks) {
+        this.clicks = clicks;
+
+    }
+
+    // TODO May need to add total clicks and sync it
+    /**
+     * Increments the click count for this user by 1.
+     * Also increments totalClicks which tracks the total clicks across rounds for
+     * this user.
+     */
+    public void incrementClicks() {
+        this.clicks++;
+        this.totalClicks++;
+    }
+
+    /**
      * @return the clientId
      */
     public long getClientId() {
         return clientId;
+    }
+
+    /**
+     * @return the totalClicks
+     */
+    public int getTotalClicks() {
+        return totalClicks;
+    }
+
+    /**
+     * @param totalClicks the totalClicks to set
+     */
+    public void setTotalClicks(int totalClicks) {
+        this.totalClicks = totalClicks;
     }
 
     /**
@@ -97,6 +139,9 @@ public class User {
         this.turnTaken = false;
         this.guess = 0; // example user data
         this.points = 0;
+        this.clicks = 0;
+        this.totalClicks = 0;
+
     }
 
     public void reset() {
