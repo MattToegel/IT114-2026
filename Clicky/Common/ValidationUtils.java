@@ -20,10 +20,14 @@ public final class ValidationUtils {
     private static final String DEFAULT_PARTICIPATING_MESSAGE = "You need to be ready before you can do that.";
     private static final String DEFAULT_ALREADY_READY_MESSAGE = "You're already marked ready for this session.";
     private static final String DEFAULT_TURN_TAKEN_MESSAGE = "You already made your choice for this round.";
-    private static final String DEFAULT_CURRENT_PLAYER_MESSAGE = "Please wait for your turn.";
     private static final String DEFAULT_TURN_OPTION_MESSAGE = "That turn option is not available.";
+    private static final String DEFAULT_AWAY_MESSAGE = "Player is away and cannot perform actions";
 
     private ValidationUtils() {
+    }
+
+    public static boolean isNullOrBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     public static void requireTrue(boolean condition) throws ConditionValidationException {
@@ -122,15 +126,12 @@ public final class ValidationUtils {
         }
     }
 
-    public static void requireCurrentPlayer(Long currentTurnPlayerId,
-            long senderClientId) throws ConditionValidationException {
-        requireCurrentPlayer(currentTurnPlayerId, senderClientId, DEFAULT_CURRENT_PLAYER_MESSAGE);
+    public static void requireNotAway(boolean away) throws ConditionValidationException {
+        requireNotAway(away, DEFAULT_AWAY_MESSAGE);
     }
 
-    public static void requireCurrentPlayer(Long currentTurnPlayerId,
-            long senderClientId,
-            String errorMessage) throws ConditionValidationException {
-        if (currentTurnPlayerId == null || currentTurnPlayerId.longValue() != senderClientId) {
+    public static void requireNotAway(boolean away, String errorMessage) throws ConditionValidationException {
+        if (away) {
             throw new ConditionValidationException(errorMessage);
         }
     }

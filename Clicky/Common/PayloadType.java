@@ -21,4 +21,6 @@ public enum PayloadType {
     POINTS, // server syncs a user's points
     GUESS, // Used by client to send guess and server to confirm guess was received
     CLICK, // Used by client to send click and server to confirm click was received
+    GAME_TIMER_SYNC, // server syncs timer type and remaining seconds
+    PLAYER_AWAY_STATUS, // server syncs whether a user is away
 }

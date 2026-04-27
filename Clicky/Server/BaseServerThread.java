@@ -115,6 +115,14 @@ public abstract class BaseServerThread extends Thread {
         this.user.setClicks(clicks);
     }
 
+    public boolean isAway() {
+        return this.user.isAway();
+    }
+
+    public void setAway(boolean away) {
+        this.user.setAway(away);
+    }
+
     /**
      * Resets the game state for this player. <br>
      * Retains clientId/clientName references.

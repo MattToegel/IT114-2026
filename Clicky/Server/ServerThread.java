@@ -3,7 +3,6 @@ package Clicky.Server;
 import java.net.Socket;
 import java.util.Objects;
 import java.util.function.Consumer;
-
 import Clicky.Common.ConnectionPayload;
 import Clicky.Common.Constants;
 import Clicky.Common.BoolPayload;
@@ -11,6 +10,8 @@ import Clicky.Common.Phase;
 import Clicky.Common.PointsPayload;
 import Clicky.Common.Payload;
 import Clicky.Common.PayloadType;
+import Clicky.Common.TimerPayload;
+import Clicky.Common.TimerType;
 import Clicky.Common.LoggerUtil;
 
 /**
@@ -67,11 +68,8 @@ public class ServerThread extends BaseServerThread {
             case READY:
                 processReady(incoming);
                 break;
-            case TURN:
-                processTurn(incoming);
-                break;
-            case GUESS:
-                processGuess(incoming);
+            case PLAYER_AWAY_STATUS:
+                processAwayToggle(incoming);
                 break;
             case CLICK:
                 processClick(incoming);
@@ -88,19 +86,14 @@ public class ServerThread extends BaseServerThread {
         Server.INSTANCE.handleClick(this);
     }
 
-    private void processGuess(Payload incoming) {
-        info("Processing guess payload");
-        Server.INSTANCE.handleGuess(this, incoming.getMessage());
-    }
-
-    private void processTurn(Payload incoming) {
-        info("Processing turn payload");
-        Server.INSTANCE.handleTurn(this, incoming.getMessage());
-    }
-
     private void processReady(Payload incoming) {
         info("Processing ready payload");
         Server.INSTANCE.handleReady(this);
+    }
+
+    private void processAwayToggle(Payload incoming) {
+        info("Processing away toggle payload");
+        Server.INSTANCE.handleAwayToggle(this);
     }
 
     private void processDisconnect(Payload incoming) {
@@ -154,16 +147,6 @@ public class ServerThread extends BaseServerThread {
         return sendToClient(payload);
     }
 
-    protected boolean sendGuessConfirmation(int guess) {
-        // in this example the guess is a number, but since I want to keep the code
-        // changes minimal, I'll leverage PointsPayload to pass the confirmation back
-        // since it provides a slot for a number despite the name not making sense
-        PointsPayload payload = new PointsPayload();
-        payload.setPayloadType(PayloadType.GUESS);
-        payload.setPoints(guess); // abusing the points field to send the guess back for confirmation
-        return sendToClient(payload);
-    }
-
     protected boolean sendTurnStatus(long clientId, boolean hasTakenTurn) {
         BoolPayload payload = new BoolPayload();
         payload.setPayloadType(PayloadType.PLAYER_TURN_STATUS);
@@ -183,11 +166,27 @@ public class ServerThread extends BaseServerThread {
         return sendToClient(payload);
     }
 
+    protected boolean sendGameTimer(TimerType timerType, int secondsRemaining) {
+        TimerPayload payload = new TimerPayload();
+        payload.setPayloadType(PayloadType.GAME_TIMER_SYNC);
+        payload.setTimerType(timerType);
+        payload.setSecondsRemaining(secondsRemaining);
+        return sendToClient(payload);
+    }
+
     protected boolean sendReadyStatus(long clientId, boolean isReady) {
         BoolPayload payload = new BoolPayload();
         payload.setPayloadType(PayloadType.PLAYER_READY_STATUS);
         payload.setClientId(clientId);
         payload.setValue(isReady);
+        return sendToClient(payload);
+    }
+
+    protected boolean sendAwayStatus(long clientId, boolean isAway) {
+        BoolPayload payload = new BoolPayload();
+        payload.setPayloadType(PayloadType.PLAYER_AWAY_STATUS);
+        payload.setClientId(clientId);
+        payload.setValue(isAway);
         return sendToClient(payload);
     }
 
@@ -246,6 +245,19 @@ public class ServerThread extends BaseServerThread {
     protected boolean sendMessage(String message) {
         Payload payload = new Payload();
         payload.setPayloadType(PayloadType.MESSAGE);
+        payload.setMessage(message);
+        return sendToClient(payload);
+    }
+
+    /**
+     * Sends a server-generated game event message tagged with GAME_CLIENT_ID (-2).
+     * Clients use this sentinel to route the message to the game events panel
+     * instead of the chat view.
+     */
+    protected boolean sendGameMessage(String message) {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.MESSAGE);
+        payload.setClientId(Constants.GAME_CLIENT_ID);
         payload.setMessage(message);
         return sendToClient(payload);
     }

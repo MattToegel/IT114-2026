@@ -3,11 +3,13 @@ package Clicky.Server;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import Clicky.Common.Constants;
 import Clicky.Common.LoggerUtil;
 import Clicky.Common.Phase;
 import Clicky.Common.TimedEvent;
+import Clicky.Common.TimerType;
 import Clicky.Common.ValidationUtils;
 import Clicky.Exceptions.ValidationException;
 
@@ -16,24 +18,22 @@ import Clicky.Exceptions.ValidationException;
  *
  * Commands currently supported from clients:
  * - /ready
- * - /turn <action>
  */
 public class GameServer extends BaseGameServer {
 
-    private static final int MIN_PLAYERS_TO_START = 2;
     private static final int READY_SECONDS = 30;
     private static final int ROUND_SECONDS = 30;
     private static final int TURN_SECONDS = 20;
+    private static final int EVALUATION_SECONDS = 5;
     private static final String GAME_TAG = "[Game] ";
 
     private volatile Phase phase = Phase.INACTIVE;
     private volatile TimedEvent readyTimer;
     private volatile TimedEvent roundTimer;
     private volatile TimedEvent turnTimer;
+    private volatile TimedEvent evaluationTimer;
     private volatile Long currentTurnPlayerId;
     private int roundNumber = 0;
-    // example data
-    private int hiddenNumber = 0;
 
     // start region for lifecycle hook implementations
     @Override
@@ -59,7 +59,7 @@ public class GameServer extends BaseGameServer {
         }
         LoggerUtil.INSTANCE.info("[GameServer] Player joined via ready: " + client.getDisplayName());
         unicastGameMessage(client, "Joined as active player. Waiting room status: "
-                + getActivePlayerCount() + "/" + MIN_PLAYERS_TO_START + " ready.");
+                + getActivePlayerCount() + "/" + Constants.REQUIRE_PLAYERS + " ready.");
         if (phase != Phase.READY) {
             unicastGameStateToJoiner(client);
         }
@@ -79,9 +79,10 @@ public class GameServer extends BaseGameServer {
             onSessionEnd();
             return;
         }
-        if (phase == Phase.IN_PROGRESS && getActivePlayerCount() < MIN_PLAYERS_TO_START) {
+        if (phase != Phase.INACTIVE && getActivePlayerCount() < Constants.REQUIRE_PLAYERS) {
             broadcastGameMessage("Not enough active players to continue.");
             onSessionEnd();
+            return;
         }
     }
 
@@ -126,19 +127,11 @@ public class GameServer extends BaseGameServer {
         LoggerUtil.INSTANCE.info("[GameServer] onTurnStart() start");
         resetTurnTimer();
 
-        List<ServerThread> snapshot = new ArrayList<>(getActivePlayers());
-        if (snapshot.isEmpty()) {
+        if (getActivePlayers().isEmpty()) {
             onSessionEnd();
             return;
         }
-        // TODO: pick next player (covered in a future lesson, below is a temporary
-        // scaffold that just picks the first active player)
-        ServerThread chosen = snapshot.get(0); // simple scaffold: first active player
-        currentTurnPlayerId = chosen.getClientId();
 
-        startTurnTimer();
-        broadcastGameMessage("Turn started for " + chosen.getDisplayName() + ". Use /turn <action> within "
-                + TURN_SECONDS + "s.");
         LoggerUtil.INSTANCE.info("[GameServer] onTurnStart() end");
     }
 
@@ -206,30 +199,64 @@ public class GameServer extends BaseGameServer {
         } else {
             onRoundStart();
         }
-        // onSessionEnd();
     }
 
     @Override
     protected synchronized void onSessionEnd() {
         LoggerUtil.INSTANCE.info("[GameServer] onSessionEnd() start");
         resetReadyTimer();
+        resetEvaluationTimer();
         resetTurnTimer();
         resetRoundTimer();
 
         currentTurnPlayerId = null;
-        phase = Phase.INACTIVE;
 
         List<ServerThread> snapshot = new ArrayList<>(getActivePlayers());
-        // find user with highest score; they're the winner (uses stream api)
-        snapshot.stream().max((p1, p2) -> Integer.compare(p1.getTotalClicks(), p2.getTotalClicks()))
-                .ifPresentOrElse(winner -> {
-                    broadcastGameMessage(
-                            String.format("Session ended: %s wins with %d clicks!", winner.getDisplayName(),
-                                    winner.getTotalClicks()));
-                }, () -> {
-                    broadcastGameMessage("Session ended with no winner.");
-                });
 
+        // if not a valid session, reset state and don't produce scoring/winner output
+        if (phase.ordinal() <= Phase.READY.ordinal()) {
+            doSessionReset(snapshot);
+            return;
+        }
+
+        if (snapshot.isEmpty()) {
+            broadcastGameMessage("Session ended with no winner.");
+            doSessionReset(snapshot);
+            return;
+        }
+
+        int topScore = snapshot.stream().mapToInt(ServerThread::getTotalClicks).max().orElse(0);
+        List<ServerThread> winners = snapshot.stream()
+                .filter(player -> player.getTotalClicks() == topScore)
+                .toList();
+
+        if (winners.size() == 1) {
+            ServerThread winner = winners.get(0);
+            broadcastGameMessage(String.format("Session ended: %s wins with %d clicks!",
+                    winner.getDisplayName(),
+                    winner.getTotalClicks()));
+        } else {
+            String winnerNames = winners.stream()
+                    .map(ServerThread::getDisplayName)
+                    .collect(Collectors.joining(", "));
+            broadcastGameMessage(String.format("Session ended in a tie at %d clicks: %s",
+                    topScore,
+                    winnerNames));
+        }
+
+        phase = Phase.EVALUATION;
+        broadcastCurrentPhase();
+        broadcastGameMessage("Results displayed for " + EVALUATION_SECONDS + " seconds...");
+        startEvaluationTimer(snapshot);
+        LoggerUtil.INSTANCE.info("[GameServer] onSessionEnd() end — evaluation timer started");
+    }
+
+    // wrapped reset logic so a delay could be used to give users time to see the
+    // end results before reset
+    private void doSessionReset(List<ServerThread> snapshot) {
+        LoggerUtil.INSTANCE.info("[GameServer] doSessionReset() start");
+        resetEvaluationTimer();
+        phase = Phase.INACTIVE;
         // reset player data and sync changes to clients before clearing active players,
         // so that clients have a chance to update any relevant UI (like ready status)
         // before being removed from the session
@@ -243,7 +270,7 @@ public class GameServer extends BaseGameServer {
 
         broadcastCurrentPhase();
         broadcastGameMessage("Session ended. Type /ready to join the next session.");
-        LoggerUtil.INSTANCE.info("[GameServer] onSessionEnd() end");
+        LoggerUtil.INSTANCE.info("[GameServer] doSessionReset() end");
     }
     // end region for lifecycle hook implementations
 
@@ -258,7 +285,11 @@ public class GameServer extends BaseGameServer {
         }
         if (readyTimer == null) {
             readyTimer = new TimedEvent(READY_SECONDS, this::checkReadyStatus);
-            readyTimer.setTickCallback(time -> LoggerUtil.INSTANCE.info("[GameServer] Ready timer: " + time));
+            readyTimer.setTickCallback(time -> {
+                int clampedTime = Math.max(0, time);
+                LoggerUtil.INSTANCE.info("[GameServer] Ready timer: " + clampedTime);
+                broadcastGameTimer(TimerType.READY, clampedTime);
+            });
             broadcastGameMessage(
                     "Ready check started. Session begins in " + READY_SECONDS + "s if enough players are ready.");
         }
@@ -273,7 +304,11 @@ public class GameServer extends BaseGameServer {
 
     private synchronized void startRoundTimer() {
         roundTimer = new TimedEvent(ROUND_SECONDS, this::onRoundEnd);
-        roundTimer.setTickCallback(time -> LoggerUtil.INSTANCE.info("[GameServer] Round timer: " + time));
+        roundTimer.setTickCallback(time -> {
+            int clampedTime = Math.max(0, time);
+            LoggerUtil.INSTANCE.info("[GameServer] Round timer: " + clampedTime);
+            broadcastGameTimer(TimerType.ROUND, clampedTime);
+        });
     }
 
     private synchronized void resetRoundTimer() {
@@ -285,7 +320,11 @@ public class GameServer extends BaseGameServer {
 
     private synchronized void startTurnTimer() {
         turnTimer = new TimedEvent(TURN_SECONDS, this::onTurnEnd);
-        turnTimer.setTickCallback(time -> LoggerUtil.INSTANCE.info("[GameServer] Turn timer: " + time));
+        turnTimer.setTickCallback(time -> {
+            int clampedTime = Math.max(0, time);
+            LoggerUtil.INSTANCE.info("[GameServer] Turn timer: " + clampedTime);
+            broadcastGameTimer(TimerType.TURN, clampedTime);
+        });
     }
 
     private synchronized void resetTurnTimer() {
@@ -295,12 +334,29 @@ public class GameServer extends BaseGameServer {
         }
     }
 
+    private synchronized void startEvaluationTimer(List<ServerThread> snapshot) {
+        resetEvaluationTimer();
+        evaluationTimer = new TimedEvent(EVALUATION_SECONDS, () -> doSessionReset(snapshot));
+        evaluationTimer.setTickCallback(time -> {
+            int clampedTime = Math.max(0, time);
+            LoggerUtil.INSTANCE.info("[GameServer] Evaluation timer: " + clampedTime);
+            broadcastGameTimer(TimerType.EVALUATION, clampedTime);
+        });
+    }
+
+    private synchronized void resetEvaluationTimer() {
+        if (evaluationTimer != null) {
+            evaluationTimer.cancel();
+            evaluationTimer = null;
+        }
+    }
+
     // End region for timer handlers ===================================
     private synchronized void checkReadyStatus() {
         if (phase != Phase.READY) {
             return;
         }
-        if (getActivePlayerCount() >= MIN_PLAYERS_TO_START) {
+        if (getActivePlayerCount() >= Constants.REQUIRE_PLAYERS) {
             onSessionStart();
         } else {
             broadcastGameMessage("Ready check expired: not enough ready players.");
@@ -309,54 +365,15 @@ public class GameServer extends BaseGameServer {
     }
 
     // start region for handle*() methods called by Server
-
     protected void handleClick(ServerThread sender) {
         try {
             ValidationUtils.requireParticipating(isActivePlayer(sender));
             ValidationUtils.requirePhase(phase, Phase.IN_PROGRESS);
+            ValidationUtils.requireNotAway(sender.isAway());
             // increment click on user
             sender.incrementClicks();
             broadcastCurrentClicks(sender);
 
-        } catch (ValidationException e) {
-            LoggerUtil.INSTANCE.warning("[GameServer] " + e.getMessage());
-            unicastGameMessage(sender, e.getMessage());
-        }
-    }
-
-    protected void handleGuess(ServerThread sender, String guess) {
-        try {
-            ValidationUtils.requireParticipating(isActivePlayer(sender));
-            ValidationUtils.requirePhase(phase, Phase.IN_PROGRESS);
-            guess = ValidationUtils.requireValidTurnOption(guess.trim());
-            // although validation should verify it's a number, I'll see do a try/catch just
-            // in case
-            // that way if I mistakenly change requireValidTurnOption() in the future and it
-            // stops validating properly, I have a fallback to prevent server crashes from
-            // NumberFormatException
-            try {
-                int guessValue = Integer.parseInt(guess);
-                // record server local state (used in round end)
-                sender.setGuess(guessValue);
-                // unicast guess to player for confirmation
-                unicastGuessConfirmation(sender, guessValue);
-                // NOTE: we won't evaluate here, we'll do it during onRoundEnd()
-            } catch (NumberFormatException e) {
-                LoggerUtil.INSTANCE.warning("[GameServer] Failed to parse turn action as number: " + guess);
-                unicastGameMessage(sender,
-                        "Failed to parse your guess as a number. Please enter a valid number between 1 and 10.");
-                return;
-            }
-
-            // keep the guess hidden from other players in this example
-            broadcastGameMessage(sender.getDisplayName() + " made a guess.");
-            // Note: technically if your action has data, turnTaken can be derived by
-            // whether or not data was recorded, but I'll keep it as a separate property for
-            // simplicity and flexibility. In a fuller project, deriving information is more
-            // efficient
-            sender.setTurnTaken(true);
-            broadcastTurnStatus(sender.getClientId(), true);
-            onTurnEnd();
         } catch (ValidationException e) {
             LoggerUtil.INSTANCE.warning("[GameServer] " + e.getMessage());
             unicastGameMessage(sender, e.getMessage());
@@ -393,26 +410,24 @@ public class GameServer extends BaseGameServer {
         }
     }
 
-    /**
-     * Handles a player's turn action. Validates the action, records the turn, and
-     * advances the game. Sends an error message back to the player on failure.
-     */
-    @Deprecated
-    public void handleTurn(ServerThread sender, String action) {
+    public void handleAwayToggle(ServerThread sender) {
         try {
-            ValidationUtils.requireParticipating(isActivePlayer(sender));
-            ValidationUtils.requirePhase(phase, Phase.IN_PROGRESS);
-            ValidationUtils.requireTurnNotTaken(sender.isTurnTaken());
-            String normalizedAction = ValidationUtils.requireValidTurnOption(action);
+            ValidationUtils.requireParticipating(isActivePlayer(sender),
+                    sender.getDisplayName() + " is not a participant");
+            boolean away = !sender.isAway();
+            sender.setAway(away);
+            broadcastAwayStatus(sender.getClientId(), away);
 
-            // TODO: turn logic would go here, in this example we're just marking that we
-            // took a turn
-            // ValidationUtils.requireCurrentPlayer(currentTurnPlayerId,
-            // sender.getClientId());
-
-            sender.setTurnTaken(true);
-            broadcastTurnStatus(sender.getClientId(), true);
-            onTurnEnd();
+            if (away) {
+                broadcastGameMessage(sender.getDisplayName() + " is away.");
+                // If the away player is currently taking a turn, advance to next player
+                if (currentTurnPlayerId != null && currentTurnPlayerId == sender.getClientId()) {
+                    broadcastGameMessage(sender.getDisplayName() + " went away during their turn. Advancing turn.");
+                    onTurnEnd();
+                }
+            } else {
+                broadcastGameMessage(sender.getDisplayName() + " is back.");
+            }
         } catch (ValidationException e) {
             LoggerUtil.INSTANCE.warning("[GameServer] " + e.getMessage());
             unicastGameMessage(sender, e.getMessage());
@@ -443,10 +458,6 @@ public class GameServer extends BaseGameServer {
         Server.INSTANCE.unicast(target, serverThread -> serverThread.sendPlayerPoints(clientId, points));
     }
 
-    private void unicastGuessConfirmation(ServerThread target, int guess) {
-        Server.INSTANCE.unicast(target, serverThread -> serverThread.sendGuessConfirmation(guess));
-    }
-
     /**
      * Sends the current phase plus all existing active players' ready, turn, and
      * points state to a newly joined player.
@@ -456,6 +467,9 @@ public class GameServer extends BaseGameServer {
             return;
         }
         unicastCurrentPhase(joiner);
+        // this scenario is likely impossible
+        // but it's an example if we were to allow rejoining
+        // if we didn't reset their data on leaving
         List<ServerThread> snapshot = new ArrayList<>(getActivePlayers());
         for (ServerThread player : snapshot) {
             if (player.getClientId() == joiner.getClientId()) {
@@ -463,6 +477,7 @@ public class GameServer extends BaseGameServer {
             }
             unicastReadyStatus(joiner, player.getClientId(), player.isReady());
             unicastTurnStatus(joiner, player.getClientId(), player.isTurnTaken());
+            unicastAwayStatus(joiner, player.getClientId(), player.isAway());
             unicastPlayerPoints(joiner, player.getClientId(), player.getPoints());
             unicastCurrentClicks(joiner, player.getClientId(), player.getClicks());
         }
@@ -503,6 +518,16 @@ public class GameServer extends BaseGameServer {
         Server.INSTANCE.unicast(target, serverThread -> serverThread.sendReadyStatus(clientId, isReady));
     }
 
+    /** Notifies all connected clients of a player's away status. */
+    private void broadcastAwayStatus(long clientId, boolean isAway) {
+        Server.INSTANCE.sendOrDisconnect(serverThread -> serverThread.sendAwayStatus(clientId, isAway));
+    }
+
+    /** Sends a player's away status to a single client. */
+    private void unicastAwayStatus(ServerThread target, long clientId, boolean isAway) {
+        Server.INSTANCE.unicast(target, serverThread -> serverThread.sendAwayStatus(clientId, isAway));
+    }
+
     /** Notifies all connected clients of a player's turn-taken status. */
     private void broadcastTurnStatus(long clientId, boolean hasTakenTurn) {
         Server.INSTANCE.sendOrDisconnect(serverThread -> serverThread.sendTurnStatus(clientId, hasTakenTurn));
@@ -513,18 +538,29 @@ public class GameServer extends BaseGameServer {
         Server.INSTANCE.unicast(target, serverThread -> serverThread.sendTurnStatus(clientId, hasTakenTurn));
     }
 
-    /** Sends a game message to all connected clients. */
+    /**
+     * Sends a game event message to all connected clients.
+     * Tagged with GAME_CLIENT_ID so clients route it to the game events panel.
+     */
     private void broadcastGameMessage(String message) {
-        Server.INSTANCE.broadcast(null, GAME_TAG + message);
+        final String formatted = GAME_TAG + message;
+        Server.INSTANCE.sendOrDisconnect(serverThread -> serverThread.sendGameMessage(formatted));
     }
 
-    /** Sends a game message to a single client. */
+    /**
+     * Sends a game event message to a single client.
+     * Tagged with GAME_CLIENT_ID so the client routes it to the game events panel.
+     */
     private void unicastGameMessage(ServerThread target, String message) {
         if (target == null) {
             return;
         }
         final String formatted = GAME_TAG + message;
-        Server.INSTANCE.unicast(target, serverThread -> serverThread.sendMessage(formatted));
+        Server.INSTANCE.unicast(target, serverThread -> serverThread.sendGameMessage(formatted));
+    }
+
+    private void broadcastGameTimer(TimerType timerType, int secondsRemaining) {
+        Server.INSTANCE.sendOrDisconnect(serverThread -> serverThread.sendGameTimer(timerType, secondsRemaining));
     }
 
     // end region for helper methods to send data to clients

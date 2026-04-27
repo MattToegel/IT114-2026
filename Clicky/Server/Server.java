@@ -81,6 +81,16 @@ public enum Server {
     }
 
     // start region for handle*() methods ===================================
+    protected synchronized void handleAwayToggle(ServerThread sender) {
+        if (!isGameServerActive()) {
+            return;
+        }
+        try {
+            gameServer.handleAwayToggle(sender);
+        } catch (Exception e) {
+            LoggerUtil.INSTANCE.severe("Game server handleAwayToggle failed", e);
+        }
+    }
 
     protected synchronized void handleClick(ServerThread sender) {
         if (!isGameServerActive()) {
@@ -90,32 +100,6 @@ public enum Server {
             gameServer.handleClick(sender);
         } catch (Exception e) {
             LoggerUtil.INSTANCE.severe("Game server handleClick failed", e);
-        }
-    }
-
-    protected synchronized void handleGuess(ServerThread sender, String guess) {
-        if (!isGameServerActive()) {
-            return;
-        }
-        try {
-            gameServer.handleGuess(sender, guess);
-        } catch (Exception e) {
-            LoggerUtil.INSTANCE.severe("Game server handleGuess failed", e);
-        }
-    }
-
-    /**
-     * Passes user's turn action to the game session
-     */
-    @Deprecated
-    protected synchronized void handleTurn(ServerThread sender, String action) {
-        if (!isGameServerActive()) {
-            return;
-        }
-        try {
-            gameServer.handleTurn(sender, action);
-        } catch (Exception e) {
-            LoggerUtil.INSTANCE.severe("Game server handleTurn failed", e);
         }
     }
 
@@ -202,7 +186,8 @@ public enum Server {
             // Non-participant chat is multicast to other non-participants only.
             // Used to prevent non-participants from spoiling a game
             List<ServerThread> nonParticipants = getConnectedClientsSnapshot().stream()
-                    .filter(client -> client.getClientId() != sender.getClientId())
+                    // don't block message from self, client doesn't assume message was sent
+                    // .filter(client -> client.getClientId() != sender.getClientId())
                     .filter(client -> !gameServer.isActivePlayer(client))
                     .collect(Collectors.toList());
 

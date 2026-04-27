@@ -9,6 +9,21 @@ public class User {
     private int points = 0;
     private int clicks = 0;
     private int totalClicks = 0;
+    private boolean away = false;
+
+    /**
+     * @return the away
+     */
+    public boolean isAway() {
+        return away;
+    }
+
+    /**
+     * @param away the away to set
+     */
+    public void setAway(boolean away) {
+        this.away = away;
+    }
 
     public User() {
     }
@@ -148,5 +163,18 @@ public class User {
         this.clientId = Constants.DEFAULT_CLIENT_ID;
         this.clientName = null;
         resetGameState();
+    }
+
+    public static User copyOf(User source) {
+        if (source == null) {
+            return null;
+        }
+        User copy = new User(source.getClientId(), source.getClientName());
+        copy.setReady(source.isReady());
+        copy.setTurnTaken(source.isTurnTaken());
+        copy.setAway(source.isAway());
+        copy.setPoints(source.getPoints());
+        copy.setClicks(source.getClicks());
+        return copy;
     }
 }
