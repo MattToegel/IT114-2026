@@ -8,6 +8,7 @@ import java.net.Socket;
 import java.util.Scanner;
 
 import M4.MCCS.Part1.Constants;
+import M4.MCCS.Part1.TextFX.Color;
 
 /** Terminal input stays on the main thread; one background thread receives messages. */
 public class Client {
@@ -151,7 +152,7 @@ public class Client {
                 if (received instanceof String message) {
                     synchronized (this) {
                         if (server == connection && !connection.isClosed()) {
-                            System.out.println(message);
+                            System.out.println(TextFX.colorize(message, Color.BLUE));
                         }
                     }
                 } else {

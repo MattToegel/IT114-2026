@@ -7,6 +7,7 @@ import java.net.Socket;
 import java.util.Objects;
 
 import M4.MCCS.Part1.Constants;
+import M4.MCCS.Part1.TextFX.Color;
 
 /** Owns one socket, its object streams, read loop, and resource cleanup. */
 public class ServerThread extends Thread {
@@ -59,6 +60,7 @@ public class ServerThread extends Thread {
     private void processMessage(String message) {
         if (message.startsWith(Constants.COMMAND_TRIGGER + ",")) {
             String[] parts = message.split(",", 3);
+            info(TextFX.colorize("Checking command: " + parts[1], Color.YELLOW));
             switch (parts[1]) {
                 case "disconnect":
                     server.handleDisconnect(this);
@@ -119,6 +121,7 @@ public class ServerThread extends Thread {
                         try {
                             Object received = input.readObject();
                             if (received instanceof String message) {
+                                info(TextFX.colorize("Received from client: " + message, Color.CYAN));
                                 processMessage(message);
                             } else {
                                 info("Ignoring an invalid payload");
