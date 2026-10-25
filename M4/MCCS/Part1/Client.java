@@ -3,242 +3,209 @@ package M4.MCCS.Part1;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.net.UnknownHostException;
 import java.util.Scanner;
-import java.util.concurrent.CompletableFuture;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
-import M4.MCCS.Part1.TextFX.Color;
+import M4.MCCS.Part1.Constants;
 
-/**
- * Multi-client chat client using ObjectInputStream/ObjectOutputStream.
- */
+/** Terminal input stays on the main thread; one background thread receives messages. */
 public class Client {
-    private Socket server = null;
-    private ObjectOutputStream out = null;
-    private ObjectInputStream in = null;
-    final Pattern ipAddressPattern = Pattern
-            .compile("/connect\\s+(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}:\\d{3,5})");
-    final Pattern localhostPattern = Pattern.compile("/connect\\s+(localhost:\\d{3,5})");
-    private volatile boolean isRunning = true;
 
-    /**
-     * Recognized client-side commands.
-     */
+    private volatile Socket server;
+    private ObjectOutputStream out;
+    private boolean isRunning = true;
+
     private enum Command {
-        CONNECT("/connect"),
-        DISCONNECT("/disconnect"),
-        QUIT("/quit"),
-        USERS("/users"),
-        REVERSE("/reverse");
+        CONNECT("/connect"), DISCONNECT("/disconnect"), QUIT("/quit"),
+        USERS("/users"), REVERSE("/reverse");
 
         private final String trigger;
 
+        /** Store the slash command spelling without changing argument text. */
         Command(String trigger) {
             this.trigger = trigger;
         }
 
-        /**
-         * Returns the matching Command for the given input text, or null if none matched.
-         */
-        public static Command fromText(String text) {
-            if (text == null) return null;
-            String lower = text.toLowerCase().trim();
-            for (Command c : values()) {
-                if (lower.equals(c.trigger) || lower.startsWith(c.trigger + " ")) {
-                    return c;
+        /** Match a command token without requiring a particular letter case. */
+        static Command fromText(String token) {
+            for (Command command : values()) {
+                if (command.trigger.equalsIgnoreCase(token)) {
+                    return command;
                 }
             }
             return null;
         }
     }
 
-    public Client() {
-        System.out.println("Client Created");
+    /** Check whether the current socket and output stream are available. */
+    public synchronized boolean isConnected() {
+        return server != null && !server.isClosed() && out != null;
     }
 
-    public boolean isConnected() {
-        if (server == null) return false;
-        // Note: these check the client's end of the socket only; they don't detect server-side failures
-        return server.isConnected() && !server.isClosed()
-                && !server.isInputShutdown() && !server.isOutputShutdown();
-    }
-
-    /**
-     * Opens a connection to the server at the given address and port.
-     * Starts listenToServer() in a background thread via CompletableFuture.
-     *
-     * @return true if the connection succeeded
-     */
-    private boolean connect(String address, int port) {
-        try {
-            server = new Socket(address, port);
-            // ObjectOutputStream must be created before ObjectInputStream on both sides to avoid deadlock
-            out = new ObjectOutputStream(server.getOutputStream());
-            in = new ObjectInputStream(server.getInputStream());
-            System.out.println("Client connected");
-            CompletableFuture.runAsync(this::listenToServer);
-        } catch (UnknownHostException e) {
-            e.printStackTrace();
-        } catch (IOException e) {
-            e.printStackTrace();
+    /** Open streams in header-safe order and start a background receiver. */
+    private synchronized boolean connect(String host, int port) {
+        if (isConnected()) {
+            System.out.println("Already connected; use /disconnect first");
+            return false;
         }
-        return isConnected();
+        Socket candidate = new Socket();
+        try {
+            candidate.connect(new InetSocketAddress(host, port), Constants.SETUP_TIMEOUT_MS);
+            candidate.setSoTimeout(Constants.SETUP_TIMEOUT_MS);
+            ObjectOutputStream output = new ObjectOutputStream(candidate.getOutputStream());
+            output.flush();
+            ObjectInputStream input = new ObjectInputStream(candidate.getInputStream());
+            candidate.setSoTimeout(0);
+            server = candidate;
+            out = output;
+            new Thread(() -> listenToServer(candidate, input)).start();
+            System.out.println("Connection opened");
+            return true;
+        } catch (IOException e) {
+            System.out.println("Connection failed: " + e.getMessage());
+            try {
+                candidate.close();
+            } catch (IOException closeError) {
+                System.out.println("Could not close failed connection: " + closeError.getMessage());
+            }
+            return false;
+        }
     }
 
-    private boolean isConnection(String text) {
-        Matcher ipMatcher = ipAddressPattern.matcher(text);
-        Matcher localhostMatcher = localhostPattern.matcher(text);
-        return ipMatcher.matches() || localhostMatcher.matches();
-    }
-
-    /**
-     * Routes user input to the appropriate action based on the Command enum.
-     *
-     * @return true if the input was a recognized command, false if it is a plain message
-     */
+    /** Handle a recognized slash command and leave ordinary chat text to the caller. */
     private boolean processClientCommand(String text) throws IOException {
-        Command command = Command.fromText(text);
+        String[] parts = text.strip().split("\\s+", 2);
+        Command command = Command.fromText(parts[0]);
         if (command == null) {
             return false;
         }
+        String arguments = parts.length == 2 ? parts[1] : "";
         switch (command) {
             case CONNECT:
-                if (isConnection(text)) {
-                    // strip "/connect ", split host:port
-                    String[] parts = text.trim().replaceAll(" +", " ").split(" ")[1].split(":");
-                    connect(parts[0].trim(), Integer.parseInt(parts[1].trim()));
-                } else {
-                    System.out.println("Invalid format. Use: /connect localhost:3000 or /connect 192.168.1.x:3000");
+                String[] endpoint = arguments.split(":", -1);
+                if (endpoint.length != 2 || endpoint[0].isBlank()) {
+                    System.out.println("Use /connect <host>:<port>");
+                    return true;
+                }
+                try {
+                    int port = Integer.parseInt(endpoint[1]);
+                    if (port < 1 || port > 65535) {
+                        System.out.println("Port must be between 1 and 65535");
+                    } else {
+                        connect(endpoint[0], port);
+                    }
+                } catch (NumberFormatException e) {
+                    System.out.println("Port must be a whole number");
                 }
                 return true;
-            case QUIT:
-                close();
-                return true;
-            case DISCONNECT:
-                sendToServer(String.join(",", Constants.COMMAND_TRIGGER, "disconnect"));
-                return true;
             case USERS:
-                sendToServer(String.join(",", Constants.COMMAND_TRIGGER, "users"));
+                sendToServer(Constants.COMMAND_TRIGGER + ",users");
                 return true;
             case REVERSE:
-                // strip "/reverse" prefix and send remainder as the text to reverse
-                String reverseText = text.replace("/reverse", "").trim();
-                sendToServer(String.join(",", Constants.COMMAND_TRIGGER, "reverse", reverseText));
+                sendReverse(arguments);
+                return true;
+            case DISCONNECT:
+                sendDisconnect();
+                return true;
+            case QUIT:
+                isRunning = false;
+                closeServerConnection(server);
                 return true;
             default:
                 return false;
         }
     }
 
-    public void start() throws IOException {
-        System.out.println("Client starting");
-        CompletableFuture<Void> inputFuture = CompletableFuture.runAsync(this::listenToInput);
-        // join() attaches the async thread to the main thread so the program doesn't exit prematurely
-        inputFuture.join();
+    /** Send ordinary chat text to the server. */
+    private void sendMessage(String message) throws IOException {
+        sendToServer(message);
     }
 
-    /**
-     * Runs in a background thread. Blocks on in.readObject() waiting for server messages.
-     */
-    private void listenToServer() {
-        try {
-            while (isRunning && isConnected()) {
-                String fromServer = (String) in.readObject(); // blocking
-                if (fromServer != null) {
-                    System.out.println(TextFX.colorize(fromServer, Color.BLUE));
+    /** Request server-side text reversal. */
+    private void sendReverse(String message) throws IOException {
+        sendToServer(Constants.COMMAND_TRIGGER + ",reverse," + message);
+    }
+
+    /** Ask the server to close this connection while keeping keyboard input available. */
+    private void sendDisconnect() throws IOException {
+        sendToServer(Constants.COMMAND_TRIGGER + ",disconnect");
+    }
+
+    /** Write through the current connection while preventing interleaved sends. */
+    private synchronized void sendToServer(String payload) throws IOException {
+        if (!isConnected()) {
+            System.out.println("Not connected; use /connect <host>:<port>");
+            return;
+        }
+        out.writeObject(payload);
+        out.flush();
+        out.reset();
+    }
+
+    /** Receive data for this socket until it closes or reading fails. */
+    private void listenToServer(Socket connection, ObjectInputStream input) {
+        try (input) {
+            while (!connection.isClosed()) {
+                Object received = input.readObject();
+                if (received instanceof String message) {
+                    synchronized (this) {
+                        if (server == connection && !connection.isClosed()) {
+                            System.out.println(message);
+                        }
+                    }
                 } else {
-                    System.out.println("Server disconnected");
-                    break;
+                    System.out.println("Ignoring an invalid server payload");
                 }
             }
-        } catch (ClassCastException | ClassNotFoundException cce) {
-            System.err.println("Error reading object as specified type: " + cce.getMessage());
-            cce.printStackTrace();
-        } catch (IOException e) {
-            if (isRunning) {
-                System.out.println("Connection dropped");
-                e.printStackTrace();
+        } catch (IOException | ClassNotFoundException e) {
+            if (!connection.isClosed()) {
+                System.out.println("Connection ended: " + e.getMessage());
             }
         } finally {
-            closeServerConnection();
+            // A finished old receiver cannot clear a subsequently opened connection.
+            closeServerConnection(connection);
         }
-        System.out.println("listenToServer thread stopped");
     }
 
-    /**
-     * Runs in a CompletableFuture thread. Blocks on scanner.nextLine() waiting for keyboard input.
-     */
-    private void listenToInput() {
-        try (Scanner si = new Scanner(System.in)) {
-            System.out.println("Waiting for input");
-            while (isRunning) {
-                String userInput = si.nextLine();
-                if (!processClientCommand(userInput)) {
-                    sendToServer(userInput);
+    /** Close this socket and clear shared fields only if it is still current. */
+    private synchronized void closeServerConnection(Socket connection) {
+        if (connection == null) {
+            return;
+        }
+        try {
+            connection.close();
+        } catch (IOException e) {
+            System.out.println("Could not close connection: " + e.getMessage());
+        }
+        if (server == connection) {
+            server = null;
+            out = null;
+            System.out.println("Disconnected");
+        }
+    }
+
+    /** Read keyboard input until quit or end-of-input, then close the connection. */
+    public void start() {
+        try (Scanner input = new Scanner(System.in)) {
+            while (isRunning && input.hasNextLine()) {
+                try {
+                    String text = input.nextLine();
+                    if (!processClientCommand(text)) {
+                        sendMessage(text);
+                    }
+                } catch (IOException e) {
+                    System.out.println("Send failed: " + e.getMessage());
+                    closeServerConnection(server);
                 }
             }
-        } catch (Exception e) {
-            // catches IOException from sendToServer/processClientCommand
-            // and NoSuchElementException from scanner if System.in is closed
-            System.out.println("Error in listenToInput(): " + e.getMessage());
-            e.printStackTrace();
-        }
-        System.out.println("listenToInput thread stopped");
-    }
-
-    private void sendToServer(String message) throws IOException {
-        if (isConnected()) {
-            out.writeObject(message);
-            out.flush();
-        } else {
-            System.out.println("Not connected to server (hint: type `/connect host:port`)");
+        } finally {
+            closeServerConnection(server);
         }
     }
 
-    private void close() {
-        isRunning = false;
-        closeServerConnection();
-        System.out.println("Client terminated");
-    }
-
-    private void closeServerConnection() {
-        try {
-            if (out != null) {
-                System.out.println("Closing output stream");
-                out.close();
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        try {
-            if (in != null) {
-                System.out.println("Closing input stream");
-                in.close();
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        try {
-            if (server != null) {
-                System.out.println("Closing connection");
-                server.close();
-                System.out.println("Closed socket");
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-
+    /** Start the course's terminal client. */
     public static void main(String[] args) {
-        Client client = new Client();
-        try {
-            client.start();
-        } catch (IOException e) {
-            System.out.println("Exception from main()");
-            e.printStackTrace();
-        }
+        new Client().start();
     }
 }
