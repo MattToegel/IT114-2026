@@ -4,174 +4,141 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.Socket;
-import java.util.Arrays;
 import java.util.Objects;
-import java.util.function.Consumer;
 
-import M4.MCCS.Part1.TextFX.Color;
+import M4.MCCS.Part1.Constants;
 
-/**
- * Server-side handler for one connected client.
- * Each client gets its own thread so multiple clients can be served concurrently.
- */
+/** Owns one socket, its object streams, read loop, and resource cleanup. */
 public class ServerThread extends Thread {
-    private Socket client;
-    private volatile boolean isRunning = false; // volatile so changes are visible across threads immediately
-    private ObjectOutputStream out;             // field so sendToClient() can reach it after run() opens it
-    private Server server;
-    private long clientId;
-    private Consumer<ServerThread> onInitializationComplete;
+    private final Socket client;
+    private final long clientId = threadId();
+    private final Server server;
+    private final java.util.function.Consumer<ServerThread> onInitializationComplete;
+    private volatile ObjectOutputStream out;
+    private volatile boolean isRunning;
 
-    private void info(String message) {
-        System.out.println(String.format("Thread[%s]: %s", this.getClientId(), message));
+    /** Keep the accepted socket and the server callback for this one client. */
+    protected ServerThread(Socket client, Server server,
+            java.util.function.Consumer<ServerThread> onInitializationComplete) {
+        this.client = Objects.requireNonNull(client, "Client socket is required");
+        this.server = Objects.requireNonNull(server, "Server is required");
+        this.onInitializationComplete = Objects.requireNonNull(onInitializationComplete, "Callback is required");
     }
 
+    /** Report whether this connection has completed setup and remains active. */
     public boolean isRunning() {
         return isRunning;
     }
 
-    protected ServerThread(Socket myClient, Server server, Consumer<ServerThread> onInitializationComplete) {
-        Objects.requireNonNull(myClient, "Client socket cannot be null");
-        Objects.requireNonNull(server, "Server cannot be null");
-        Objects.requireNonNull(onInitializationComplete, "Callback cannot be null");
-        this.clientId = this.threadId(); // set before any logging so the id appears correctly
-        this.client = myClient;
-        this.server = server;
-        this.onInitializationComplete = onInitializationComplete;
-        info("ServerThread created");
-    }
-
+    /** Return this handler's stable, process-local thread identifier. */
     public long getClientId() {
-        return this.clientId;
+        return clientId;
     }
 
-    /**
-     * Signals this thread to stop. Sets isRunning to false and interrupts the blocking readObject() call
-     * so the run() loop exits and the finally block handles cleanup.
-     * Call from outside this thread only (e.g. from Server).
-     */
-    protected void disconnect() {
-        if (!isRunning) {
-            return;
+    /** Build the temporary display label used before named clients are introduced. */
+    public String getDisplayName() {
+        return "User[" + clientId + "]";
+    }
+
+    /** Write a diagnostic labeled with this client's identity. */
+    private void info(String message) {
+        System.out.println(getDisplayName() + ": " + message);
+    }
+
+    /** Notify the server that the streams are ready for communication. */
+    private void onInitialized() {
+        onInitializationComplete.accept(this);
+    }
+
+    /** Notify the server after closing this client connection. */
+    private void onDisconnected() {
+        server.handleDisconnect(this);
+    }
+
+    /** Interpret wire commands or delegate ordinary text to the server. */
+    private void processMessage(String message) {
+        if (message.startsWith(Constants.COMMAND_TRIGGER + ",")) {
+            String[] parts = message.split(",", 3);
+            switch (parts[1]) {
+                case "disconnect":
+                    server.handleDisconnect(this);
+                    return;
+                case "users":
+                    server.handleGetUserList(this);
+                    return;
+                case "reverse":
+                    server.handleReverseText(this, parts.length > 2 ? parts[2] : "");
+                    return;
+                default:
+                    break;
+            }
         }
-        info("Thread being disconnected by server");
-        isRunning = false;
-        this.interrupt(); // unblocks readObject() if the thread is waiting on it
+        server.handleMessage(this, message);
     }
 
-    /**
-     * Sends a message to this client.
-     *
-     * @return true on success, false if the send failed (client likely disconnected)
-     */
-    protected boolean sendToClient(String message) {
-        if (!isRunning) {
+    /** Write a message; success reports a completed write, not a delivery receipt. */
+    protected synchronized boolean sendToClient(String payload) {
+        if (!isRunning || out == null || client.isClosed()) {
             return false;
         }
         try {
-            out.writeObject(message);
+            out.writeObject(payload);
             out.flush();
+            out.reset(); // Release previously written objects from the stream's cache.
             return true;
         } catch (IOException e) {
-            info("Error sending message to client (most likely disconnected)");
+            info("Send failed: " + e.getMessage());
             return false;
         }
     }
 
-    @Override
-    public void run() {
-        info("Thread starting");
-        // ObjectOutputStream must be opened before ObjectInputStream on both sides.
-        // Reversing the order causes a deadlock: both sides block waiting for the other's stream header.
-        try (ObjectOutputStream out = new ObjectOutputStream(client.getOutputStream());
-             ObjectInputStream in = new ObjectInputStream(client.getInputStream())) {
-            this.out = out;
-            isRunning = true;
-            onInitializationComplete.accept(this); // notify Server this thread is ready
-            while (isRunning) {
-                try {
-                    String fromClient = (String) in.readObject(); // blocks until client sends something
-                    if (fromClient == null) {
-                        throw new IOException("Connection interrupted");
-                    } else {
-                        info(TextFX.colorize("Received from client: " + fromClient, Color.CYAN));
-                        processPayload(fromClient);
-                    }
-                } catch (ClassCastException | ClassNotFoundException cce) {
-                    System.err.println("Error reading object as specified type: " + cce.getMessage());
-                    cce.printStackTrace();
-                } catch (IOException e) {
-                    if (Thread.currentThread().isInterrupted()) {
-                        info("Thread interrupted during read, disconnect() was called");
-                        break;
-                    }
-                    info("IO exception while reading from client");
-                    e.printStackTrace();
-                    break;
-                }
-            }
-        } catch (Exception e) {
-            info("Unexpected exception outside read loop (stream setup may have failed)");
-            e.printStackTrace();
-            info("Client disconnected unexpectedly");
-        } finally {
-            isRunning = false;
-            info("Exited thread loop. Cleaning up connection");
-            cleanup();
-        }
-    }
-
-    /**
-     * Routes incoming text to a command handler or broadcasts it as a chat message.
-     */
-    private void processPayload(String incoming) {
-        if (!processCommand(incoming)) {
-            server.handleMessage(this, incoming);
-        }
-    }
-
-    /**
-     * Checks if the message is a command and handles it.
-     * Commands start with COMMAND_TRIGGER and are comma-separated: trigger,name,data
-     * Example: [cmd],reverse,hello world
-     *
-     * @return true if a command was handled, false if plain text
-     */
-    private boolean processCommand(String message) {
-        if (!message.startsWith(Constants.COMMAND_TRIGGER)) {
-            return false;
-        }
-        String[] commandData = message.split(",");
-        if (commandData.length < 2) {
-            return false;
-        }
-        final String command = commandData[1].trim();
-        System.out.println(TextFX.colorize("Checking command: " + command, Color.YELLOW));
-        switch (command) {
-            case "disconnect":
-                server.handleDisconnect(this);
-                return true;
-            case "users":
-                server.handleGetUserList(this);
-                return true;
-            case "reverse":
-                // join remaining segments back into the text to reverse
-                String relevantText = String.join(" ", Arrays.copyOfRange(commandData, 2, commandData.length));
-                server.handleReverseText(this, relevantText);
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    private void cleanup() {
-        info("ServerThread cleanup() start");
+    /** Close the classic socket to release blocked platform-thread I/O. */
+    protected void disconnect() {
+        isRunning = false;
         try {
             client.close();
-            info("Closed server-side socket");
         } catch (IOException e) {
-            info("Client already closed");
+            info("Could not close the socket: " + e.getMessage());
         }
-        info("ServerThread cleanup() end");
+    }
+
+    /** Initialize both object streams, receive this client's data, and always clean up. */
+    @Override
+    public void run() {
+        // Both endpoints send and flush their stream header before waiting for input.
+        try (Socket connection = client) {
+            connection.setSoTimeout(Constants.SETUP_TIMEOUT_MS);
+            try (ObjectOutputStream output = new ObjectOutputStream(connection.getOutputStream())) {
+                out = output;
+                output.flush();
+                try (ObjectInputStream input = new ObjectInputStream(connection.getInputStream())) {
+                    connection.setSoTimeout(0);
+                    isRunning = true;
+                    onInitialized();
+                    while (isRunning) {
+                        try {
+                            Object received = input.readObject();
+                            if (received instanceof String message) {
+                                processMessage(message);
+                            } else {
+                                info("Ignoring an invalid payload");
+                            }
+                        } catch (ClassNotFoundException e) {
+                            info("Unknown message class: " + e.getMessage());
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            if (isRunning) {
+                info("Connection ended: " + e.getMessage());
+            } else {
+                info("Connection closed during setup or cleanup");
+            }
+        } finally {
+            disconnect();
+            // Notify the server after this handler closes its connection.
+            onDisconnected();
+        }
     }
 }
