@@ -4,7 +4,7 @@ package Project.Common;
  * Utility to attempt to provide colored text in the terminal.
  * <p>
  * Important: This does not satisfy the text formatting feature/requirement for
- * chatroom projects.
+ * the selected game project.
  * </p>
  */
 public abstract class TextFX {
@@ -13,7 +13,7 @@ public abstract class TextFX {
      * TextFX.Color list of available colors
      * <p>
      * Important: This does not satisfy the text formatting feature/requirement for
-     * chatroom projects.
+     * the selected game project.
      * </p>
      */
     public enum Color {
@@ -47,7 +47,7 @@ public abstract class TextFX {
      * </p>
      * <p>
      * Important: This does not satisfy the text formatting feature/requirement for
-     * chatroom projects.
+     * the selected game project.
      * </p>
      *
      * @param text  Input text to colorize

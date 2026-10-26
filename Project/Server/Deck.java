@@ -1,87 +1,61 @@
 package Project.Server;
 
+import Project.Common.Card;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
-import Project.Common.Card;
-import Project.Common.LoggerUtil;
+/** Load a small card catalog and draw from shuffled copies of it. */
+final class Deck {
+    private final Map<Integer, Card> catalog = new LinkedHashMap<>();
+    private final List<Integer> drawPile = new ArrayList<>();
+    private final Random random = new Random();
 
-public class Deck {
-    private final List<Card> cards = new ArrayList<>();
-    private final HashMap<Integer, Card> byId = new HashMap<>();
-
-    private void refillDrawPile() {
-        cards.clear();
-        cards.addAll(byId.values());
-    }
-
-    public void loadCardsFromFile() {
-        cards.clear();
-        byId.clear();
-        // Load cards.txt from classpath so this works from IDE runs and jar packaging.
-        Path file = Paths.get("Project", "Server", "cards.txt");
-        if (!Files.exists(file)) {
-            file = Paths.get("cards.txt");
-        }
-
-        try {
-            for (String line : Files.readAllLines(file)) {
-                if (line == null || line.isBlank()) {
-                    continue;
-                }
-                String[] parts = line.split(",");
-                if (parts.length < 2) {
-                    continue;
-                }
-
-                int id;
-                int mod;
-                try {
-                    id = Integer.parseInt(parts[0].trim());
-                    mod = Integer.parseInt(parts[1].trim());
-                } catch (NumberFormatException e) {
-                    continue;
-                }
-
-                Card card = new Card(id, mod);
-                cards.add(card);
-                byId.put(card.getId(), card);
+    Deck(Path file) throws IOException {
+        for (String line : Files.readAllLines(file)) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                continue;
             }
-        } catch (IOException e) {
-            LoggerUtil.INSTANCE.warning("Unable to load cards file: " + file);
-            return;
+            String[] parts = trimmed.split(",", -1);
+            if (parts.length != 2) {
+                throw new IOException("Invalid card line: " + trimmed);
+            }
+            try {
+                int id = Integer.parseInt(parts[0].trim());
+                int modifier = Integer.parseInt(parts[1].trim());
+                if (id < 1 || modifier < 1 || modifier > 9 || catalog.containsKey(id)) {
+                    throw new IOException("Invalid card definition: " + trimmed);
+                }
+                catalog.put(id, new Card(id, modifier));
+            } catch (NumberFormatException e) {
+                throw new IOException("Invalid card number: " + trimmed, e);
+            }
         }
-
-        refillDrawPile();
-    }
-
-    public Card getById(int id) {
-        return byId.get(id);
-    }
-
-    public List<Card> getCatalogSnapshot() {
-        return new ArrayList<>(byId.values());
-    }
-
-    public boolean hasCards() {
-        return !cards.isEmpty();
-    }
-
-    public int drawCardId(Random rng) {
-        if (cards.isEmpty()) {
-            refillDrawPile();
+        if (catalog.isEmpty()) {
+            throw new IOException("Card catalog is empty");
         }
-        if (cards.isEmpty()) {
-            return -1;
+        refill();
+    }
+
+    List<Card> catalog() { return List.copyOf(catalog.values()); }
+    Card find(int id) { return catalog.get(id); }
+
+    int draw() {
+        if (drawPile.isEmpty()) {
+            refill();
         }
-        int index = rng.nextInt(cards.size());
-        Card card = cards.remove(index);
-        return card.getId();
+        return drawPile.remove(drawPile.size() - 1);
+    }
+
+    private void refill() {
+        drawPile.addAll(catalog.keySet());
+        Collections.shuffle(drawPile, random);
     }
 }

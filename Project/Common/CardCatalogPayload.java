@@ -1,16 +1,19 @@
 package Project.Common;
 
-import java.util.ArrayList;
 import java.util.List;
 
+/** Public definitions used to display cards by ID and modifier. */
 public class CardCatalogPayload extends Payload {
-    private List<Card> cards = new ArrayList<>();
+    private final List<Card> cards;
 
-    public List<Card> getCards() {
-        return cards;
+    public CardCatalogPayload(List<Card> cards) {
+        this.cards = List.copyOf(cards);
     }
 
-    public void setCards(List<Card> cards) {
-        this.cards = cards == null ? new ArrayList<>() : new ArrayList<>(cards);
+    public List<Card> getCards() { return cards; }
+
+    @Override
+    public String toString() {
+        return super.toString() + " Catalog: " + cards;
     }
 }

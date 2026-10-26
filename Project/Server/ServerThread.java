@@ -1,272 +1,68 @@
 package Project.Server;
 
+import Project.Common.*;
+
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.net.Socket;
 import java.util.Objects;
-import java.util.List;
-import java.util.function.Consumer;
 
-import Project.Common.CardActionPayload;
-import Project.Common.Card;
-import Project.Common.CardCatalogPayload;
-import Project.Common.CardHandPayload;
-import Project.Common.ConnectionPayload;
-import Project.Common.Constants;
-import Project.Common.BoolPayload;
-import Project.Common.GridCellPayload;
-import Project.Common.GridSeedPayload;
-import Project.Common.Phase;
-import Project.Common.PointsPayload;
-import Project.Common.Payload;
-import Project.Common.PayloadType;
-import Project.Common.LoggerUtil;
 
-/**
- * Server-side handler for one connected client.
- * Each client gets its own thread so multiple clients can be served
- * concurrently.
- */
-public class ServerThread extends BaseServerThread {
+/** Owns one socket, its object streams, read loop, and resource cleanup. */
+public class ServerThread extends Thread {
+    private final Socket client;
+    private volatile User user = new User(Constants.DEFAULT_CLIENT_ID, null);
+    private final java.util.Timer nameTimer = new java.util.Timer(true);
+    private final Server server;
+    private final java.util.function.Consumer<ServerThread> onInitializationComplete;
+    private volatile ObjectOutputStream out;
+    private volatile boolean isRunning;
 
-    private final Consumer<ServerThread> onInitializationComplete;
-
-    protected ServerThread(Socket myClient, Consumer<ServerThread> onInitializationComplete) {
-        // validate and pass to base class constructor
-        super(Objects.requireNonNull(myClient, "Client socket cannot be null"));
-        // validate and assign callback
-        this.onInitializationComplete = Objects.requireNonNull(onInitializationComplete, "Callback cannot be null");
-        info("ServerThread created");
+    /** Keep the accepted socket and the server callback for this one client. */
+    protected ServerThread(Socket client, Server server,
+            java.util.function.Consumer<ServerThread> onInitializationComplete) {
+        this.client = Objects.requireNonNull(client, "Client socket is required");
+        this.server = Objects.requireNonNull(server, "Server is required");
+        this.onInitializationComplete = Objects.requireNonNull(onInitializationComplete, "Callback is required");
     }
 
-    @Override
-    protected void info(String message) {
-        // Include client ID in the log for context
-        LoggerUtil.INSTANCE.info("[ClientId: " + this.getClientId() + "] " + message);
+    /** Report whether this connection has completed setup and remains active. */
+    public boolean isRunning() {
+        return isRunning;
     }
 
-    @Override
-    protected void onInitialized() {
-        if (onInitializationComplete == null) {
-            info("Initialization complete but callback is null. This should not happen.");
-            return;
-        }
-        onInitializationComplete.accept(this);
+    /** Return the identity held by this connection. */
+    public long getClientId() {
+        return user.getClientId();
     }
 
-    /**
-     * Routes incoming text to a command handler or broadcasts it as a chat message.
-     */
-    @Override
-    protected void processPayload(Payload incoming) {
-
-        switch (incoming.getPayloadType()) {
-            case CLIENT_CONNECT:
-                processClientConnect(incoming);
-                break;
-            case DISCONNECT:
-                processDisconnect(incoming);
-                break;
-            case MESSAGE:
-                processMessage(incoming);
-                break;
-            case REVERSE:
-                processReverse(incoming);
-                break;
-            case READY:
-                processReady(incoming);
-                break;
-            case TURN:
-                processTurn(incoming);
-                break;
-            case GUESS:
-                // @Deprecated guess flow
-                processGuess(incoming);
-                break;
-            case GRID_CELL_SYNC:
-                // @Deprecated grid test compatibility flow
-                processGridTestUpdate(incoming);
-                break;
-            case CARD_ACTION:
-                processCardAction(incoming);
-                break;
-            default:
-                info("Received unsupported payload type: " + incoming.getPayloadType());
-        }
+    /** Use the user's display label in connection messages. */
+    public String getDisplayName() {
+        return user.getDisplayName();
     }
 
-    // Region used to hand off data to Server methods for processing
-    // Start region for process*() methods ===================================
-    @Deprecated // @Deprecated guess flow
-    private void processGuess(Payload incoming) {
-        info("Processing guess payload");
-        Server.INSTANCE.handleGuess(this, incoming.getMessage());
+    /** Return this connection's current user snapshot. */
+    protected User getUser() {
+        return user;
     }
 
-    private void processCardAction(Payload incoming) {
-        info("Processing card action payload");
-        if (!(incoming instanceof CardActionPayload)) {
-            info("Received invalid payload for card action: " + incoming);
-            return;
-        }
-        CardActionPayload cap = (CardActionPayload) incoming;
-        Server.INSTANCE.handleCardAction(this, cap.getCardId(), cap.getX(), cap.getY());
+    /** Assign the ID while retaining the accepted name. */
+    protected void setClientId(long value) {
+        user = new User(value, user.getClientName());
     }
 
-    @Deprecated // @Deprecated grid test compatibility flow
-    private void processGridTestUpdate(Payload incoming) {
-        info("Processing grid test update payload");
-        if (!(incoming instanceof GridCellPayload)) {
-            info("Received invalid payload for grid test update: " + incoming);
-            return;
-        }
-        GridCellPayload gcp = (GridCellPayload) incoming;
-        Server.INSTANCE.handleGridTestUpdate(this, gcp.getX(), gcp.getY(), gcp.getValue());
+    /** Return the name stored with this connection's identity. */
+    protected String getClientName() {
+        return user.getClientName();
     }
 
-    private void processTurn(Payload incoming) {
-        info("Processing turn payload");
-        Server.INSTANCE.handleTurn(this, incoming.getMessage());
+    /** Report whether the server has assigned a positive client ID. */
+    private boolean isRegistered() {
+        return getClientId() > 0;
     }
 
-    private void processReady(Payload incoming) {
-        info("Processing ready payload");
-        Server.INSTANCE.handleReady(this);
-    }
-
-    private void processDisconnect(Payload incoming) {
-        info("Processing disconnect payload");
-        Server.INSTANCE.handleDisconnect(this);
-    }
-
-    private void processReverse(Payload incoming) {
-        info("Processing reverse payload");
-        Server.INSTANCE.handleReverseText(this, incoming.getMessage());
-    }
-
-    private void processMessage(Payload incoming) {
-        info("Processing message payload");
-        Server.INSTANCE.handleMessage(this, incoming.getMessage());
-    }
-
-    private void processClientConnect(Payload incoming) {
-        info("Processing client connect payload");
-        if (!(incoming instanceof ConnectionPayload)) {
-            info("Received invalid payload for client connect: " + incoming);
-            return;
-        }
-        if (getClientId() != Constants.DEFAULT_CLIENT_ID) {
-            info("Received client connect payload but client is already initialized. Ignoring.");
-            return;
-        }
-        // TODO: could add validation for client name here (not blank, length limit,
-        // profanity filter, etc)
-        setClientName(((ConnectionPayload) incoming).getClientName());
-    }
-    // End region for process*() methods ===================================
-
-    // Start region for send*() methods ===================================
-    protected boolean sendCardHand(long clientId, List<Integer> cardIds) {
-        CardHandPayload payload = new CardHandPayload();
-        payload.setPayloadType(PayloadType.CARD_HAND_SYNC);
-        payload.setClientId(clientId);
-        payload.setCardIds(cardIds);
-        return sendToClient(payload);
-    }
-
-    protected boolean sendCardCatalog(List<Card> cards) {
-        CardCatalogPayload payload = new CardCatalogPayload();
-        payload.setPayloadType(PayloadType.CARD_CATALOG_SYNC);
-        payload.setCards(cards);
-        return sendToClient(payload);
-    }
-    protected boolean sendCurrentTurn(long clientId) {
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.CURRENT_TURN);
-        payload.setClientId(clientId);
-        return sendToClient(payload);
-    }
-
-    protected boolean sendGridSeed(long seed, int width, int height) {
-        GridSeedPayload payload = new GridSeedPayload();
-        payload.setPayloadType(PayloadType.GRID_SEED_SYNC);
-        payload.setSeed(seed);
-        payload.setWidth(width);
-        payload.setHeight(height);
-        return sendToClient(payload);
-    }
-
-    protected boolean sendGridCell(int x, int y, int value) {
-        GridCellPayload payload = new GridCellPayload();
-        payload.setPayloadType(PayloadType.GRID_CELL_SYNC);
-        payload.setX(x);
-        payload.setY(y);
-        payload.setValue(value);
-        return sendToClient(payload);
-    }
-
-    protected boolean sendPlayerPoints(long clientId, int points) {
-        PointsPayload payload = new PointsPayload();
-        payload.setPayloadType(PayloadType.POINTS);
-        payload.setClientId(clientId);
-        payload.setPoints(points);
-        return sendToClient(payload);
-    }
-
-    @Deprecated // @Deprecated guess flow
-    protected boolean sendGuessConfirmation(int guess) {
-        // in this example the guess is a number, but since I want to keep the code
-        // changes minimal, I'll leverage PointsPayload to pass the confirmation back
-        // since it provides a slot for a number despite the name not making sense
-        PointsPayload payload = new PointsPayload();
-        payload.setPayloadType(PayloadType.GUESS);
-        payload.setPoints(guess); // abusing the points field to send the guess back for confirmation
-        return sendToClient(payload);
-    }
-
-    protected boolean sendTurnStatus(long clientId, boolean hasTakenTurn) {
-        BoolPayload payload = new BoolPayload();
-        payload.setPayloadType(PayloadType.PLAYER_TURN_STATUS);
-        payload.setClientId(clientId);
-        payload.setValue(hasTakenTurn);
-        return sendToClient(payload);
-    }
-
-    protected boolean sendGamePhase(Phase phase) {
-        if (phase == null) {
-            LoggerUtil.INSTANCE.severe("Attempting to send null game phase to client. This should not happen.");
-            return true; // returning true so we don't cause a disconnect event
-        }
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.GAME_PHASE_SYNC);
-        payload.setMessage(phase.name());
-        return sendToClient(payload);
-    }
-
-    protected boolean sendReadyStatus(long clientId, boolean isReady) {
-        BoolPayload payload = new BoolPayload();
-        payload.setPayloadType(PayloadType.PLAYER_READY_STATUS);
-        payload.setClientId(clientId);
-        payload.setValue(isReady);
-        return sendToClient(payload);
-    }
-
-    /**
-     * Sends a disconnect trigger to the client before disconnecting. This allows
-     * the client to differentiate between a normal disconnect and a kick/timeout.
-     * The client can use this information to decide whether to attempt an automatic
-     * reconnect or not.
-     */
-    protected void sendDisconnectTrigger() {
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.DISCONNECT);
-        sendToClient(payload);
-        disconnect();
-    }
-
-    /**
-     * Sends the assigned client ID back to the client after they connect.
-     * 
-     * @return
-     */
+    /** Confirm this connection's assigned identity. */
     protected boolean sendClientId() {
         ConnectionPayload payload = new ConnectionPayload();
         payload.setPayloadType(PayloadType.CLIENT_ID);
@@ -275,38 +71,199 @@ public class ServerThread extends BaseServerThread {
         return sendToClient(payload);
     }
 
-    /**
-     * Sends a client status update to this client. Used to notify of other clients
-     * joining or leaving, as well as to sync existing clients when a new client
-     * joins.
-     * 
-     * @param clientId   the clientId of the client whose status is being updated
-     * @param clientName the clientName of the client whose status is being updated
-     * @param isJoin     true if this is a join event, false if it's a leave event
-     * @param isSync     true if this is part of the initial sync when a new client
-     *                   joins, false if it's a real-time update after the initial
-     *                   sync
-     * @return true if the message was sent successfully, false if the send failed
-     *         (client likely disconnected)
-     */
-    protected boolean sendClientStatus(long clientId, String clientName, boolean isJoin, boolean isSync) {
+    /** Send one presence payload through this connection. */
+    protected boolean sendClientStatus(long id, String name, PayloadType type) {
         ConnectionPayload payload = new ConnectionPayload();
-        if (isSync) {
-            payload.setPayloadType(PayloadType.SERVER_SYNC);
-        } else {
-            payload.setPayloadType(isJoin ? PayloadType.SERVER_JOIN : PayloadType.SERVER_LEAVE);
+        payload.setPayloadType(type);
+        payload.setClientId(id);
+        payload.setClientName(name);
+        return sendToClient(payload);
+    }
+
+    /** Write a diagnostic labeled with this client's identity. */
+    private void info(String message) {
+        LoggerUtil.INSTANCE.info(getDisplayName() + ": " + message);
+    }
+
+    /** Notify the server that the streams are ready for communication. */
+    private void onInitialized() {
+        onInitializationComplete.accept(this);
+    }
+
+    /** Notify the server after closing this client connection. */
+    private void onDisconnected() {
+        server.onServerThreadDisconnected(this);
+    }
+
+    /** Route typed client input to its matching process method. */
+    private void processPayload(Payload payload) {
+        if (payload == null || payload.getPayloadType() == null) {
+            info("Ignoring an invalid payload");
+            return;
         }
-        payload.setClientId(clientId);
-        payload.setClientName(clientName);
-        return sendToClient(payload);
+        switch (payload.getPayloadType()) {
+            case CLIENT_CONNECT:
+                processClientConnect((ConnectionPayload) payload);
+                break;
+            case MESSAGE:
+                processMessage(payload);
+                break;
+            case REVERSE:
+                processReverse(payload);
+                break;
+            case USERS:
+                processGetUserList();
+                break;
+            case DISCONNECT:
+                processDisconnect();
+                break;
+            case READY:
+                processReady();
+                break;
+            case RESET:
+                processReset();
+                break;
+            case CARD_ACTION:
+                processCardAction((CardActionPayload) payload);
+                break;
+            default:
+                info("Unsupported client message: " + payload.getPayloadType());
+                break;
+        }
     }
 
-    protected boolean sendMessage(String message) {
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.MESSAGE);
-        payload.setMessage(message);
-        return sendToClient(payload);
+    /** Read chat data and pass ordinary text to the server handler. */
+    private void processMessage(Payload payload) {
+        if (isRegistered() && payload.getMessage() != null) {
+            server.handleMessage(this, payload.getMessage());
+        }
     }
 
-    // End region for send*() methods ===================================
+    /** Read the requested text before asking the server to reverse it. */
+    private void processReverse(Payload payload) {
+        if (!isRegistered()) {
+            return;
+        }
+        server.handleReverseText(this, payload.getMessage() == null ? "" : payload.getMessage());
+    }
+
+    /** Ask the server for the connected-user list. */
+    private void processGetUserList() {
+        if (!isRegistered()) {
+            return;
+        }
+        server.handleGetUserList(this);
+    }
+
+    /** Apply this client's request to disconnect. */
+    private void processDisconnect() {
+        server.handleDisconnect(this);
+    }
+
+    /** Pass a registered client's readiness request to the game owner. */
+    private void processReady() {
+        if (isRegistered()) {
+            server.handleReady(this);
+        }
+    }
+
+    /** Pass a registered client's reset request to the game owner. */
+    private void processReset() {
+        if (isRegistered()) {
+            server.handleReset(this);
+        }
+    }
+
+    /** Interpret a typed card action for the game owner. */
+    private void processCardAction(CardActionPayload payload) {
+        if (isRegistered()) {
+            server.handleCardAction(this, payload.getCardId(), payload.getX(), payload.getY());
+        }
+    }
+
+    /** Accept one valid name, then register this initialized connection. */
+    private void processClientConnect(ConnectionPayload payload) {
+        if (isRegistered()) {
+            return;
+        }
+        String proposed = payload.getClientName();
+        if (proposed == null || proposed.isBlank()) {
+            disconnect();
+            return;
+        }
+        user = new User(getClientId(), proposed.trim());
+        nameTimer.cancel();
+        onInitialized();
+    }
+
+    /** Write this payload unchanged; success means the write completed. */
+    protected synchronized boolean sendToClient(Payload payload) {
+        if (!isRunning || out == null || client.isClosed()) {
+            return false;
+        }
+        try {
+            out.writeObject(payload);
+            out.flush();
+            out.reset(); // Release previously written objects from the stream's cache.
+            return true;
+        } catch (IOException e) {
+            info("Send failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /** Close the classic socket to release blocked platform-thread I/O. */
+    protected void disconnect() {
+        isRunning = false;
+        try {
+            client.close();
+        } catch (IOException e) {
+            info("Could not close the socket: " + e.getMessage());
+        }
+    }
+
+    /** Initialize both object streams, receive this client's data, and always clean up. */
+    @Override
+    public void run() {
+        // Both endpoints send and flush their stream header before waiting for input.
+        try (Socket connection = client) {
+            connection.setSoTimeout(Constants.SETUP_TIMEOUT_MS);
+            try (ObjectOutputStream output = new ObjectOutputStream(connection.getOutputStream())) {
+                out = output;
+                output.flush();
+                try (ObjectInputStream input = new ObjectInputStream(connection.getInputStream())) {
+                    connection.setSoTimeout(0);
+                    isRunning = true;
+                    nameTimer.schedule(new java.util.TimerTask() {
+                        @Override
+                        public void run() {
+                            if (getClientName() == null) {
+                                disconnect();
+                            }
+                        }
+                    }, Constants.SETUP_TIMEOUT_MS);
+                    while (isRunning) {
+                        try {
+                            processPayload((Payload) input.readObject());
+                        } catch (ClassCastException e) {
+                            info("Ignoring an invalid payload");
+                        } catch (ClassNotFoundException e) {
+                            info("Unknown message class: " + e.getMessage());
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            if (isRunning) {
+                info("Connection ended: " + e.getMessage());
+            } else {
+                info("Connection closed during setup or cleanup");
+            }
+        } finally {
+            disconnect();
+            nameTimer.cancel();
+            // Notify the server after this handler closes its connection.
+            onDisconnected();
+        }
+    }
 }
