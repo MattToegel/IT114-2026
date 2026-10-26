@@ -1,5 +1,7 @@
 package Project.Server;
 
+import Project.Common.*;
+
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -8,241 +10,217 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
-import Project.Common.LoggerUtil;
-import Project.Common.TextFX;
-import Project.Common.TextFX.Color;
-
+/** Accepts connections and selects the recipients of each message. */
 public enum Server {
-    INSTANCE; // Singleton instance
+    INSTANCE;
 
-    // Static initializer block to configure server-side logging
     static {
         LoggerUtil.LoggerConfig config = new LoggerUtil.LoggerConfig();
-        config.setFileSizeLimit(2048 * 1024); // 2MB
+        config.setFileSizeLimit(2048 * 1024);
         config.setFileCount(1);
         config.setLogLocation("server.log");
         LoggerUtil.INSTANCE.setConfig(config);
     }
 
-    private int port = 3000;
-    private ServerSocket serverSocket = null; // kept as field so shutdown() can close it
-    // thread-safe map; multiple ServerThreads may call Server methods concurrently
     private final ConcurrentHashMap<Long, ServerThread> connectedClients = new ConcurrentHashMap<>();
-    // ArrayList is sufficient; all access flows through synchronized methods
     private final List<ServerThread> disconnectedBuffer = new ArrayList<>();
-    private boolean isRunning = true;
+    private volatile boolean isRunning = true;
+    private volatile ServerSocket listener;
+    private long nextClientId = 1;
 
-    private long nextClientId = 1; // simple client ID generator
-
-    private void info(String message) {
-        LoggerUtil.INSTANCE.info(TextFX.colorize("Server: " + message, Color.YELLOW));
-    }
-
-    /**
-     * Gracefully disconnect clients
-     */
-    private void shutdown() {
-        try {
-            isRunning = false; // stop the accept() loop in start()
-            if (serverSocket != null && !serverSocket.isClosed()) {
-                serverSocket.close(); // unblocks the blocking accept() call in start()
-            }
-            // ConcurrentHashMap.values().forEach() is thread-safe; no
-            // ConcurrentModificationException risk.
-            // By closing the serverSocket first, no new clients can be added to
-            // connectedClients during this iteration.
-            connectedClients.values().forEach(serverThread -> serverThread.disconnect());
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
+    /** Register resource cleanup for JVM shutdown. */
     private Server() {
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            info("JVM is shutting down. Perform cleanup tasks.");
-            shutdown();
-        }));
+        Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown));
     }
 
+    /** Accept connections and give each socket its own handler thread. */
     private void start(int port) {
-        this.port = port;
-        info("Listening on port " + this.port);
         try (ServerSocket serverSocket = new ServerSocket(port)) {
-            this.serverSocket = serverSocket; // store reference so shutdown() can close it
+            listener = serverSocket;
+            LoggerUtil.INSTANCE.info("Server listening on " + port);
             while (isRunning) {
-                info("Waiting for next client");
-                Socket incomingClient = serverSocket.accept(); // blocks until a client connects
-                info("Client connected");
-                // third arg is a callback; ServerThread calls it once streams are open and it
-                // is ready
-                ServerThread serverThread = new ServerThread(incomingClient, this::onServerThreadInitialized);
-                serverThread.start();
-                // not added to connectedClients here; that happens inside the callback after
-                // setup
+                Socket client = serverSocket.accept();
+                new ServerThread(client, this, this::onServerThreadInitialized).start();
             }
         } catch (IOException e) {
-            info("Error accepting connection");
-            e.printStackTrace();
+            if (isRunning) {
+                LoggerUtil.INSTANCE.info("Server error: " + e.getMessage());
+            }
         } finally {
-            info("Server socket closed");
+            shutdown();
         }
     }
 
-    /**
-     * Callback from ServerThread once streams are open and it is ready to
-     * send/receive.
-     * Registers the client and announces their arrival.
-     */
-    private synchronized void onServerThreadInitialized(ServerThread serverThread) {
-        serverThread.setClientId(nextClientId++);// set then increase client id
-        if (nextClientId < 0) { // handle overflow just in case
-            nextClientId = 1;
+    /** Stop acceptance and close current connections without holding the registry lock. */
+    private void shutdown() {
+        isRunning = false;
+        try {
+            if (listener != null) {
+                listener.close();
+            }
+        } catch (IOException e) {
+            LoggerUtil.INSTANCE.info("Could not close listener: " + e.getMessage());
         }
-        serverThread.sendClientId(); // send the assigned client ID back to the client
-        connectedClients.put(serverThread.getClientId(), serverThread);
-        unicastClientStatus(serverThread); // send existing users to new client first
-        // Note: broadcastClientStatus includes the new client itself (they receive
-        // their own SERVER_JOIN
-        // and a SERVER_SYNC about themselves from unicast). This is intentional —
-        // filtering it out would
-        // add complexity that isn't the focus of this lesson; the client handles it
-        // safely via putIfAbsent.
-        broadcastClientStatus(serverThread, true, false); // then announce new client to everyone
+        // Socket close does not wait for a handler's callback or hold the registry lock.
+        for (ServerThread client : connectedClients.values()) {
+            client.disconnect();
+        }
     }
 
-    /**
-     * Internal disconnect: stops the thread, removes it from the map, and
-     * broadcasts a notice.
-     * Used by handleDisconnect() and can be reused for server-side actions like
-     * kicks or timeouts.
-     */
-    private synchronized void disconnect(ServerThread serverThread) {
-        if (!connectedClients.containsKey(serverThread.getClientId())) {
-            // already removed (e.g. sendOrDisconnect pruned it during a broadcast)
-            // — avoid double-broadcast of the leave status
+    /** Register a handler only after its object streams are ready. */
+    private synchronized void onServerThreadInitialized(ServerThread client) {
+        if (!client.isRunning()) {
             return;
         }
-        serverThread.sendDisconnectTrigger();
-        LoggerUtil.INSTANCE
-                .info(TextFX.colorize("Client " + serverThread.getDisplayName() + " disconnected.", Color.RED));
-        connectedClients.remove(serverThread.getClientId());
-        broadcastClientStatus(serverThread, false, false);
+        client.setClientId(nextAvailableClientId());
+        if (!client.sendClientId()) {
+            client.disconnect();
+            return;
+        }
+        if (!syncExistingUsersTo(client) || !client.isRunning()) {
+            return;
+        }
+        connectedClients.put(client.getClientId(), client);
+        sendServerJoin(client);
     }
 
-    // start region for handle*() methods ===================================
-    // handle* methods are the interface ServerThread uses to trigger Server actions
-
-    /**
-     * Called when a client requests to disconnect. Delegates to disconnect().
-     */
-    protected synchronized void handleDisconnect(ServerThread sender) {
-        disconnect(sender);
+    /** Send the current user-list snapshot to one connection. */
+    private boolean syncExistingUsersTo(ServerThread recipient) {
+        List<User> users = new ArrayList<>();
+        for (ServerThread existing : connectedClients.values()) {
+            users.add(existing.getUser());
+        }
+        if (!sendServerSync(recipient, users)) {
+            recipient.disconnect();
+            return false;
+        }
+        return true;
     }
 
-    /** Reverses the text and broadcasts the result. */
-    protected synchronized void handleReverseText(ServerThread sender, String text) {
-        StringBuilder sb = new StringBuilder(text);
-        sb.reverse();
-        broadcast(sender, sb.toString());
+    /** Bundle the existing-user snapshot for one new or requesting client. */
+    private boolean sendServerSync(ServerThread recipient, List<User> users) {
+        UserListPayload payload = new UserListPayload(users);
+        payload.setPayloadType(PayloadType.SERVER_SYNC);
+        return recipient.sendToClient(payload);
     }
 
-    /** Broadcasts a chat message from the sender to all clients. */
-    protected synchronized void handleMessage(ServerThread sender, String text) {
-        broadcast(sender, text);
+    /** Bundle a join event and announce it to the connected clients. */
+    private void sendServerJoin(ServerThread client) {
+        ConnectionPayload payload = new ConnectionPayload();
+        payload.setPayloadType(PayloadType.SERVER_JOIN);
+        payload.setClientId(client.getClientId());
+        payload.setClientName(client.getClientName());
+        sendBroadcast(payload);
     }
-    // end region for handle*() methods ===================================
 
-    // start region for data broadcast ==============================
-
-    private void unicastClientStatus(ServerThread incomingServerThread) {
-        // send existing clients' info to the newly connected client as a silent sync.
-
-        // Uses a "for each" loop so it can early exit on failure
-        // (e.g. if the new client's connection drops during the sync, we don't want to
-        // keep trying to send the rest of the clients' info)
-        for (ServerThread existingServerThread : connectedClients.values()) {
-            boolean success = incomingServerThread.sendClientStatus(
-                    existingServerThread.getClientId(),
-                    existingServerThread.getClientName(),
-                    true,
-                    true);
-            if (!success) {
-                disconnect(incomingServerThread);
-                break;
+    /** Choose a positive ID that is not assigned to a connected client. */
+    private long nextAvailableClientId() {
+        while (true) {
+            if (nextClientId <= 0) {
+                nextClientId = 1;
+            }
+            long candidate = nextClientId++;
+            if (!connectedClients.containsKey(candidate)) {
+                return candidate;
             }
         }
     }
 
-    /**
-     * Sends connected clients a status update about a client joining or leaving
-     * 
-     * @param targetServerThread the client whose status changed
-     * @param isJoin             true if joining, false if leaving
-     * @param isSync             true if this is a silent background sync, false for
-     *                           a real-time join/leave event
-     */
-    private void broadcastClientStatus(ServerThread targetServerThread, boolean isJoin, boolean isSync) {
-        sendOrDisconnect(serverThread -> serverThread.sendClientStatus(
-                targetServerThread.getClientId(),
-                targetServerThread.getClientName(),
-                isJoin,
-                isSync));
-
+    /** Close this connection and queue one leave event on its first removal. */
+    private void removeClient(ServerThread client) {
+        client.disconnect();
+        if (connectedClients.remove(client.getClientId(), client)) {
+            disconnectedBuffer.add(client);
+        }
     }
 
-    /**
-     * Sends a message to all connected clients.
-     * Any client whose send fails is removed from the map.
-     */
-    private synchronized void broadcast(ServerThread sender, String message) {
-        String senderLabel = sender == null ? "Server" : String.format("%s", sender.getDisplayName());
-        final String formatted = String.format("%s: %s", senderLabel, message);
-        sendOrDisconnect(serverThread -> serverThread.sendMessage(formatted));
+    /** Apply a disconnect requested by this client. */
+    protected synchronized void handleDisconnect(ServerThread client) {
+        onServerThreadDisconnected(client);
     }
-    // end region for data broadcast ==============================
 
-    // utils
-    /**
-     * Applies sendAction to each connected client, buffering failures, then
-     * processes the disconnected buffer. Reduces duplicated removeIf boilerplate.
-     */
-    private synchronized void sendOrDisconnect(Function<ServerThread, Boolean> sendAction) {
-        connectedClients.values().removeIf(serverThread -> {
-            boolean success = sendAction.apply(serverThread);
-            if (!success) {
-                LoggerUtil.INSTANCE
-                        .info(TextFX.colorize("Failed to send message to client " + serverThread.getDisplayName()
-                                + ". Removing from connected clients.", Color.RED));
-                disconnectedBuffer.add(serverThread);
-            }
-            return !success;
-        });
+    /** Remove a closed connection and send queued leave notices. */
+    protected synchronized void onServerThreadDisconnected(ServerThread client) {
+        removeClient(client);
         processDisconnectedBuffer();
     }
 
-    /**
-     * Processes the disconnected buffer by broadcasting disconnects for each
-     * buffered client, then clearing the buffer. Used to handle edge cases where a
-     * client disconnects in the middle
-     */
-    private void processDisconnectedBuffer() {
-        if (disconnectedBuffer.isEmpty())
-            return;
-        List<ServerThread> snapshot = new ArrayList<>(disconnectedBuffer);
-        disconnectedBuffer.clear();
-        snapshot.forEach(st -> broadcastClientStatus(st, false, false));
+    /** Send a requested user list through the same structured snapshot path. */
+    protected synchronized void handleGetUserList(ServerThread requester) {
+        if (!syncExistingUsersTo(requester)) {
+            removeClient(requester);
+            processDisconnectedBuffer();
+        }
     }
 
+    /** Format client chat before sending it to the connected clients. */
+    protected synchronized void handleMessage(ServerThread sender, String text) {
+        sendMessage(sender.getDisplayName() + ": " + text);
+    }
+
+    /** Reverse the requested text before sending its reply. */
+    protected synchronized void handleReverseText(ServerThread sender, String text) {
+        sendMessage(sender.getDisplayName() + ": " + new StringBuilder(text).reverse());
+    }
+
+    /** Bundle a MESSAGE payload and broadcast it. */
+    private void sendMessage(String message) {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.MESSAGE);
+        payload.setMessage(message);
+        sendBroadcast(payload);
+    }
+
+    /** Send the supplied payload to every ready handler without changing its data. */
+    private void sendBroadcast(Payload payload) {
+        sendOrDisconnect(recipient -> recipient.sendToClient(payload));
+    }
+
+    /** Try each current recipient and queue failed connections for removal. */
+    private void sendPass(Function<ServerThread, Boolean> sendAction) {
+        for (ServerThread client : List.copyOf(connectedClients.values())) {
+            if (!sendAction.apply(client)) {
+                removeClient(client);
+            }
+        }
+    }
+
+    /** Complete a send pass before processing its disconnect notices. */
+    private void sendOrDisconnect(Function<ServerThread, Boolean> sendAction) {
+        sendPass(sendAction);
+        processDisconnectedBuffer();
+    }
+
+    /** Drain leave notices without recursively broadcasting further failures. */
+    private void processDisconnectedBuffer() {
+        while (!disconnectedBuffer.isEmpty()) {
+            ServerThread departed = disconnectedBuffer.remove(0);
+            LoggerUtil.INSTANCE.info("Removed " + departed.getDisplayName());
+            sendLeaveNotice(departed);
+        }
+    }
+
+    /** Send the typed leave event without starting another cleanup pass. */
+    private void sendLeaveNotice(ServerThread departed) {
+        sendPass(recipient -> recipient.sendClientStatus(
+                departed.getClientId(), departed.getClientName(), PayloadType.SERVER_LEAVE));
+    }
+
+    /** Validate the optional port argument and start the server. */
     public static void main(String[] args) {
-        LoggerUtil.INSTANCE.info("Server Starting");
-        Server server = Server.INSTANCE;
         int port = 3000;
         try {
-            port = Integer.parseInt(args[0]);
-        } catch (Exception e) {
-            // use default port
+            if (args.length > 0) {
+                port = Integer.parseInt(args[0]);
+            }
+            if (port < 1 || port > 65535) {
+                LoggerUtil.INSTANCE.info("Port must be between 1 and 65535");
+                return;
+            }
+        } catch (NumberFormatException e) {
+            LoggerUtil.INSTANCE.info("Port must be a whole number");
+            return;
         }
-        server.start(port);
-        LoggerUtil.INSTANCE.info("Server Stopped");
+        Server.INSTANCE.start(port);
     }
 }

@@ -1,453 +1,329 @@
 package Project.Client;
 
+import Project.Common.*;
+
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.net.UnknownHostException;
 import java.util.Scanner;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
-import Project.Common.ConnectionPayload;
-import Project.Common.LoggerUtil;
-import Project.Common.Payload;
-import Project.Common.PayloadType;
-import Project.Common.TextFX;
-import Project.Common.TextFX.Color;
-import Project.Common.User;
 
-/**
- * Multi-client chat client using ObjectInputStream/ObjectOutputStream.
- */
+
+/** Terminal input stays on the main thread; one background thread receives messages. */
 public enum Client {
     INSTANCE;
 
-    {
-        // statically initialize the client-side LoggerUtil
+    static {
         LoggerUtil.LoggerConfig config = new LoggerUtil.LoggerConfig();
-        config.setFileSizeLimit(2048 * 1024); // 2MB
+        config.setFileSizeLimit(2048 * 1024);
         config.setFileCount(1);
         config.setLogLocation("client.log");
-        // Set the logger configuration
         LoggerUtil.INSTANCE.setConfig(config);
     }
-    private Socket server = null;
-    private ObjectOutputStream out = null;
-    private ObjectInputStream in = null;
-    final Pattern ipAddressPattern = Pattern
-            .compile("/connect\\s+(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}:\\d{3,5})");
-    final Pattern localhostPattern = Pattern.compile("/connect\\s+(localhost:\\d{3,5})");
-    private volatile boolean isRunning = true;
-    // local cache of users known connected users; updated by SYNC_CLIENT payloads
-    // from server
-    private ConcurrentHashMap<Long, User> knownUsers = new ConcurrentHashMap<>();
-    private User myUser = new User(); // this client's User object; set on successful connect when server sends client
-    // id
 
-    private Client() {
-        LoggerUtil.INSTANCE.info("Client Created");
-    }
+    private volatile Socket server;
+    private ObjectOutputStream out;
+    private boolean isRunning = true;
+    private String clientName;
+    private long clientId = Constants.DEFAULT_CLIENT_ID;
+    private final java.util.concurrent.ConcurrentHashMap<Long, User> knownUsers = new java.util.concurrent.ConcurrentHashMap<>();
 
-    public boolean isConnected() {
-        if (server == null)
-            return false;
-        // Note: these check the client's end of the socket only; they don't detect
-        // server-side failures
-        return server.isConnected() && !server.isClosed()
-                && !server.isInputShutdown() && !server.isOutputShutdown();
-    }
+    private enum Command {
+        CONNECT("/connect"), DISCONNECT("/disconnect"), QUIT("/quit"),
+        USERS("/users"), REVERSE("/reverse"), SET_NAME("/name");
 
-    /**
-     * Opens a connection to the server at the given address and port.
-     * Starts listenToServer() in a background thread via CompletableFuture.
-     *
-     * @return true if the connection succeeded
-     */
-    private boolean connect(String address, int port) {
-        try {
-            server = new Socket(address, port);
-            // ObjectOutputStream must be created before ObjectInputStream on both sides to
-            // avoid deadlock
-            out = new ObjectOutputStream(server.getOutputStream());
-            in = new ObjectInputStream(server.getInputStream());
-            LoggerUtil.INSTANCE.info("Client connected");
-            CompletableFuture.runAsync(this::listenToServer);
-        } catch (UnknownHostException e) {
-            LoggerUtil.INSTANCE.severe("Unknown host: " + e.getMessage());
-        } catch (IOException e) {
-            LoggerUtil.INSTANCE.severe("IO error: " + e.getMessage());
+        private final String trigger;
+
+        /** Store the slash command spelling without changing argument text. */
+        Command(String trigger) {
+            this.trigger = trigger;
         }
-        return isConnected();
+
+        /** Match a command token without requiring a particular letter case. */
+        static Command fromText(String token) {
+            for (Command command : values()) {
+                if (command.trigger.equalsIgnoreCase(token)) {
+                    return command;
+                }
+            }
+            return null;
+        }
     }
 
-    private boolean isConnection(String text) {
-        Matcher ipMatcher = ipAddressPattern.matcher(text);
-        Matcher localhostMatcher = localhostPattern.matcher(text);
-        return ipMatcher.matches() || localhostMatcher.matches();
+    /** Check whether the current socket and output stream are available. */
+    public synchronized boolean isConnected() {
+        return server != null && !server.isClosed() && out != null;
     }
 
-    /**
-     * Routes user input to the appropriate action based on the Command enum.
-     *
-     * @return true if the input was a recognized command, false if it is a plain
-     *         message
-     */
+    /** Open streams in header-safe order and start a background receiver. */
+    private synchronized boolean connect(String host, int port) {
+        if (isConnected()) {
+            LoggerUtil.INSTANCE.info("Already connected; use /disconnect first");
+            return false;
+        }
+        Socket candidate = new Socket();
+        try {
+            candidate.connect(new InetSocketAddress(host, port), Constants.SETUP_TIMEOUT_MS);
+            candidate.setSoTimeout(Constants.SETUP_TIMEOUT_MS);
+            ObjectOutputStream output = new ObjectOutputStream(candidate.getOutputStream());
+            output.flush();
+            ObjectInputStream input = new ObjectInputStream(candidate.getInputStream());
+            candidate.setSoTimeout(0);
+            server = candidate;
+            out = output;
+            new Thread(() -> listenToServer(candidate, input)).start();
+            LoggerUtil.INSTANCE.info("Connection opened");
+            return true;
+        } catch (IOException e) {
+            LoggerUtil.INSTANCE.info("Connection failed: " + e.getMessage());
+            try {
+                candidate.close();
+            } catch (IOException closeError) {
+                LoggerUtil.INSTANCE.info("Could not close failed connection: " + closeError.getMessage());
+            }
+            return false;
+        }
+    }
+
+    /** Handle a recognized slash command and leave ordinary chat text to the caller. */
     private boolean processClientCommand(String text) throws IOException {
-        Command command = Command.fromText(text);
-        LoggerUtil.INSTANCE.info("Processing command: " + command);
+        String[] parts = text.trim().split("\\s+", 2);
+        Command command = Command.fromText(parts[0]);
         if (command == null) {
             return false;
         }
+        String arguments = parts.length == 2 ? parts[1] : "";
         switch (command) {
             case CONNECT:
-                if (isConnection(text)) {
-                    String myClientName = myUser.getClientName();
-                    if (myClientName == null || myClientName.isBlank()) {
-                        LoggerUtil.INSTANCE
-                                .warning(TextFX.colorize("Set your name before connecting using `/name YourName`",
-                                        Color.YELLOW));
-                        return true;
-                    }
-                    // strip "/connect ", split host:port
-                    String[] parts = text.trim().replaceAll(" +", " ").split(" ")[1].split(":");
-                    connect(parts[0].trim(), Integer.parseInt(parts[1].trim()));
-                    sendConnectionData(myClientName); // send the desired name after connection request
-                } else {
-                    LoggerUtil.INSTANCE
-                            .severe("Invalid format. Use: /connect localhost:3000 or /connect 192.168.1.x:3000");
+                if (clientName == null || clientName.isBlank()) {
+                    LoggerUtil.INSTANCE.info("Set a name with /name <name> before connecting");
+                    return true;
                 }
-                return true;
-            case QUIT: // client-side termination
-                close();
-                return true;
-            case DISCONNECT: // request to gracefully disconnect from the server
-                sendDisconnect();
-                return true;
-            case USERS: // client-side command
-                StringBuilder sb = new StringBuilder();
-                sb.append("Known clients:\n");
-                knownUsers.forEach((key, value) -> {
-                    sb.append(TextFX.colorize(String.format("%s%s", value.getDisplayName(),
-                            key == myUser.getClientId() ? " (you)" : ""), Color.CYAN));
-                    sb.append("\n");
-                });
-                LoggerUtil.INSTANCE.info(sb.toString());
-                return true;
-            case REVERSE:
-                // strip "/reverse" prefix and send remainder as the text to reverse
-                String reverseText = text.replace("/reverse", "").trim();
-                sendReverse(reverseText);
+                String[] endpoint = arguments.split(":", -1);
+                if (endpoint.length != 2 || endpoint[0].isBlank()) {
+                    LoggerUtil.INSTANCE.info("Use /connect <host>:<port>");
+                    return true;
+                }
+                try {
+                    int port = Integer.parseInt(endpoint[1]);
+                    if (port < 1 || port > 65535) {
+                        LoggerUtil.INSTANCE.info("Port must be between 1 and 65535");
+                    } else {
+                        if (connect(endpoint[0], port)) {
+                            sendConnectionData();
+                        }
+                    }
+                } catch (NumberFormatException e) {
+                    LoggerUtil.INSTANCE.info("Port must be a whole number");
+                }
                 return true;
             case SET_NAME:
-                String name = text.replace("/name", "").trim();
-                if (name.isBlank()) {
-                    LoggerUtil.INSTANCE.severe(TextFX.colorize("Name cannot be blank", Color.RED));
+                if (isConnected()) {
+                    LoggerUtil.INSTANCE.info("Disconnect before changing your name");
+                } else if (arguments.isBlank()) {
+                    LoggerUtil.INSTANCE.info("Use /name <name>");
                 } else {
-                    myUser.setClientName(name);// temporarily hold client's desired name
-                    // sendConnectionData() will trigger the server-side initialization flow
-                    LoggerUtil.INSTANCE.info(
-                            TextFX.colorize("Name set to " + name + ".", Color.GREEN));
+                    clientName = arguments;
+                    LoggerUtil.INSTANCE.info("Name set to " + arguments);
                 }
+                return true;
+            case USERS:
+                LoggerUtil.INSTANCE.info("Known clients:");
+                knownUsers.values().forEach(user -> LoggerUtil.INSTANCE.info(user.getDisplayName()));
+                return true;
+            case REVERSE:
+                sendReverse(arguments);
+                return true;
+            case DISCONNECT:
+                sendDisconnect();
+                return true;
+            case QUIT:
+                isRunning = false;
+                closeServerConnection(server);
                 return true;
             default:
                 return false;
         }
     }
 
-    // Start region for send*() methods ===================================
-
-    /**
-     * Sends a client connect command to the server with this client's name. <br>
-     * Wraps the name in a ConnectionPayload object with PayloadType.CLIENT_CONNECT.
-     * 
-     * @param clientName
-     * @throws IOException
-     */
-    private void sendConnectionData(String clientName) throws IOException {
+    /** Send the chosen name after the streams open. */
+    private void sendConnectionData() throws IOException {
         ConnectionPayload payload = new ConnectionPayload();
         payload.setPayloadType(PayloadType.CLIENT_CONNECT);
         payload.setClientName(clientName);
         sendToServer(payload);
     }
 
-    /**
-     * Sends a disconnect command to the server. <br>
-     * Wraps the command in a Payload object with PayloadType.DISCONNECT.
-     * 
-     * @throws IOException
-     */
+    /** Send ordinary chat text to the server. */
+    private void sendMessage(String message) throws IOException {
+        sendAction(PayloadType.MESSAGE, message);
+    }
+
+    /** Request server-side text reversal. */
+    private void sendReverse(String message) throws IOException {
+        sendAction(PayloadType.REVERSE, message);
+    }
+
+    /** Ask the server to close this connection while keeping keyboard input available. */
     private void sendDisconnect() throws IOException {
+        sendAction(PayloadType.DISCONNECT, null);
+    }
+
+    /** Build one typed message for chat or a slash command. */
+    private void sendAction(PayloadType type, String message) throws IOException {
         Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.DISCONNECT);
+        payload.setPayloadType(type);
+        payload.setMessage(message);
         sendToServer(payload);
     }
 
-    /**
-     * Sends a reverse command to the server with the text to reverse. <br>
-     * Wraps the text in a Payload object with PayloadType.REVERSE.
-     * 
-     * @param text
-     * @throws IOException
-     */
-    private void sendReverse(String text) throws IOException {
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.REVERSE);
-        payload.setMessage(text);
-        sendToServer(payload);
-    }
-
-    /**
-     * Sends a chat message to the server to be broadcast to other clients. <br>
-     * Wraps incoming data in Payload object with PayloadType.MESSAGE.
-     * 
-     * @param text
-     * @throws IOException
-     */
-    private void sendMessage(String text) throws IOException {
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.MESSAGE);
-        payload.setMessage(text);
-        sendToServer(payload);
-    }
-
-    private void sendToServer(Payload outgoingPayload) throws IOException {
-        if (isConnected()) {
-            out.writeObject(outgoingPayload);
-            out.flush();
-        } else {
-            LoggerUtil.INSTANCE.warning("Not connected to server (hint: type `/connect host:port`)");
+    /** Write through the current connection while preventing interleaved sends. */
+    private synchronized void sendToServer(Payload payload) throws IOException {
+        if (!isConnected()) {
+            LoggerUtil.INSTANCE.info("Not connected; use /connect <host>:<port>");
+            return;
         }
-    }
-    // End region for send*() methods ===================================
-
-    public void start() throws IOException {
-        LoggerUtil.INSTANCE.info("Client starting");
-        CompletableFuture<Void> inputFuture = CompletableFuture.runAsync(this::listenToInput);
-        // join() attaches the async thread to the main thread so the program doesn't
-        // exit prematurely
-        inputFuture.join();
+        out.writeObject(payload);
+        out.flush();
+        out.reset();
     }
 
-    /**
-     * Runs in a background thread. Blocks on in.readObject() waiting for server
-     * messages.
-     */
-    private void listenToServer() {
-        try {
-            while (isRunning && isConnected()) {
+    /** Receive data for this socket until it closes or reading fails. */
+    private void listenToServer(Socket connection, ObjectInputStream input) {
+        try (input) {
+            while (!connection.isClosed()) {
                 try {
-                    Payload fromServer = (Payload) in.readObject(); // blocking
-                    if (fromServer != null) {
-                        processPayload(fromServer);
-                    } else {
-                        LoggerUtil.INSTANCE.info("Server disconnected");
-                        break;
+                    Payload payload = (Payload) input.readObject();
+                    synchronized (this) {
+                        if (server == connection && !connection.isClosed()) {
+                            processPayload(payload);
+                        }
                     }
-                } catch (ClassCastException | ClassNotFoundException cce) {
-                    // recoverable: single bad payload, keep the connection alive
-                    LoggerUtil.INSTANCE.severe("Error reading object as specified type: " + cce.getMessage());
-                    cce.printStackTrace();
+                } catch (ClassCastException e) {
+                    LoggerUtil.INSTANCE.info("Ignoring an invalid server payload");
                 }
             }
-        } catch (IOException e) {
-            // non-recoverable: stream broken, exit loop
-            if (isRunning) {
-                LoggerUtil.INSTANCE.severe("Connection dropped");
-                e.printStackTrace();
+        } catch (IOException | ClassNotFoundException e) {
+            if (!connection.isClosed()) {
+                LoggerUtil.INSTANCE.info("Connection ended: " + e.getMessage());
             }
         } finally {
-            closeServerConnection();
+            // A finished old receiver cannot clear a subsequently opened connection.
+            closeServerConnection(connection);
         }
-        LoggerUtil.INSTANCE.info("listenToServer thread stopped");
     }
 
-    /**
-     * Routes incoming Payloads from the server to the appropriate handler based on
-     * the PayloadType.
-     * 
-     * @param payload
-     */
+    /** Route each incoming payload to its matching process method. */
     private void processPayload(Payload payload) {
         if (payload == null || payload.getPayloadType() == null) {
-            LoggerUtil.INSTANCE.warning("Received invalid payload: " + payload);
+            LoggerUtil.INSTANCE.info("Ignoring an invalid server payload");
             return;
         }
         switch (payload.getPayloadType()) {
+            case SERVER_SYNC:
+                processServerSync((UserListPayload) payload);
+                break;
             case CLIENT_ID:
-                // server is assigning this client an id; create myUser object
-                processClientId(payload);
+                processClientId((ConnectionPayload) payload);
                 break;
             case SERVER_JOIN:
-            case SERVER_SYNC:
+                processServerJoin((ConnectionPayload) payload);
+                break;
             case SERVER_LEAVE:
-                processClientStatus(payload);
+                processServerLeave((ConnectionPayload) payload);
                 break;
             case MESSAGE:
                 processMessage(payload);
                 break;
-            case REVERSE:
-                processReverse(payload);
-                break;
-            case DISCONNECT: // server acknowledged this client's disconnect command; close connection
-                LoggerUtil.INSTANCE.info("Server acknowledged disconnect. Closing connection.");
-                closeServerConnection();
+            case DISCONNECT:
+                processDisconnect();
                 break;
             default:
-                LoggerUtil.INSTANCE.warning("Received unhandled payload type: " + payload.getPayloadType());
+                break;
         }
     }
 
-    // Start region for process*() methods ===================================
-
-    private void processReverse(Payload payload) {
-        // reversed text response from server; print it with a different color
-        LoggerUtil.INSTANCE.info(TextFX.colorize(payload.getMessage(), Color.PURPLE));
+    /** Store the initial list of users already connected to the server. */
+    private void processServerSync(UserListPayload userList) {
+        for (User user : userList.getUsers()) {
+            knownUsers.put(user.getClientId(), user);
+        }
     }
 
-    /**
-     * Processes a MESSAGE payload from the server
-     * 
-     * @param payload
-     */
+    /** Store the identity assigned to this connection. */
+    private void processClientId(ConnectionPayload confirmation) {
+        clientId = confirmation.getClientId();
+        knownUsers.put(clientId, new User(clientId, confirmation.getClientName()));
+        LoggerUtil.INSTANCE.info("Connected as " + confirmation.getClientName() + "#" + clientId);
+    }
+
+    /** Add the newly connected user to the local list. */
+    private void processServerJoin(ConnectionPayload connection) {
+        User user = new User(connection.getClientId(), connection.getClientName());
+        knownUsers.putIfAbsent(user.getClientId(), user);
+        LoggerUtil.INSTANCE.info(user.getDisplayName() + " joined");
+    }
+
+    /** Remove a departed user and report the departure once. */
+    private void processServerLeave(ConnectionPayload connection) {
+        User user = new User(connection.getClientId(), connection.getClientName());
+        if (knownUsers.remove(user.getClientId()) != null) {
+            LoggerUtil.INSTANCE.info(user.getDisplayName() + " left");
+        }
+    }
+
+    /** Display a chat message received from the server. */
     private void processMessage(Payload payload) {
-        // regular chat message from another client; just print it
-        LoggerUtil.INSTANCE.info(TextFX.colorize(payload.getMessage(), Color.BLUE));
+        LoggerUtil.INSTANCE.info(payload.getMessage());
     }
 
-    /**
-     * Processes SERVER_JOIN, SERVER_LEAVE, and SERVER_SYNC payloads, which all
-     * share the same format.
-     * Updates the knownUsers cache and prints join/leave messages as appropriate.
-     * 
-     * @param payload
-     */
-    private void processClientStatus(Payload payload) {
-        if (!(payload instanceof ConnectionPayload)) {
-            LoggerUtil.INSTANCE
-                    .warning(String.format("Expected ConnectionPayload for %s, got: %s", payload.getPayloadType(),
-                            payload.getClass()));
+    /** Apply the server's disconnect response to the current connection. */
+    private void processDisconnect() {
+        closeServerConnection(server);
+    }
+
+    /** Close this socket and clear shared fields only if it is still current. */
+    private synchronized void closeServerConnection(Socket connection) {
+        if (connection == null) {
             return;
         }
-        // SERVER_JOIN, SERVER_LEAVE, and SERVER_SYNC all use the same payload type and
-        // format
-        PayloadType type = payload.getPayloadType();
-        long clientId = payload.getClientId();
-        String clientName = ((ConnectionPayload) payload).getClientName();
-        // temp user reference to avoid repeated code; will be added/removed from
-        // knownUsers cache as needed
-        User incomingUserData = new User(clientId, clientName);
-        switch (type) {
-            case SERVER_JOIN: // new client joined; print join message then fall through to add to knownUsers
-                LoggerUtil.INSTANCE.info(TextFX.colorize(incomingUserData.getDisplayName() + " joined", Color.GREEN));
-                // intentional fall-through: SERVER_JOIN and SERVER_SYNC both need putIfAbsent
-            case SERVER_SYNC: // silent sync of existing clients on initial connect; just add to known users
-                knownUsers.putIfAbsent(clientId, incomingUserData);
-                break;
-            case SERVER_LEAVE: // client left; remove from known users and print message
-                User removedUser = knownUsers.remove(incomingUserData.getClientId());
-                if (removedUser != null) {
-                    // only inform if we actually knew about the user
-                    LoggerUtil.INSTANCE.info(TextFX.colorize(removedUser.getDisplayName() + " left", Color.RED));
-                }
-                break;
-
-            default:
-                LoggerUtil.INSTANCE.warning(TextFX.colorize("Unknown status type: " + type, Color.YELLOW));
-                break;
-        }
-    }
-
-    /**
-     * Processes a CLIENT_ID payload from the server, which assigns this client its
-     * unique id and name.
-     * 
-     * @param payload
-     */
-    private void processClientId(Payload payload) {
-        if (!(payload instanceof ConnectionPayload)) {
-            LoggerUtil.INSTANCE.warning("Expected ConnectionPayload for CLIENT_ID, got: " + payload.getClass());
-            return;
-        }
-        // extract data
-        long assignedId = payload.getClientId();
-        String clientName = ((ConnectionPayload) payload).getClientName();
-        // create my users
-        myUser.setClientId(assignedId);
-        myUser.setClientName(clientName);
-        // add to known users cache
-        knownUsers.put(assignedId, myUser);
-        LoggerUtil.INSTANCE.info(TextFX.colorize("Connected", Color.GREEN));
-    }
-    // End region for process*() methods ===================================
-
-    /**
-     * Runs in a CompletableFuture thread. Blocks on scanner.nextLine() waiting for
-     * keyboard input.
-     */
-    private void listenToInput() {
-        try (Scanner si = new Scanner(System.in)) {
-            LoggerUtil.INSTANCE.info("Waiting for input");
-            while (isRunning) {
-                String userInput = si.nextLine();
-                if (!processClientCommand(userInput)) {
-                    sendMessage(userInput);
-                }
-            }
-        } catch (Exception e) {
-            // catches IOException from sendToServer/processClientCommand
-            // and NoSuchElementException from scanner if System.in is closed
-            LoggerUtil.INSTANCE.severe("Error in listenToInput(): " + e.getMessage());
-            e.printStackTrace();
-        }
-        LoggerUtil.INSTANCE.info("listenToInput thread stopped");
-    }
-
-    private void close() {
-        isRunning = false;
-        closeServerConnection();
-        LoggerUtil.INSTANCE.info("Client terminated");
-    }
-
-    private void closeServerConnection() {
-        knownUsers.clear();
-        myUser.reset();
         try {
-            if (out != null) {
-                LoggerUtil.INSTANCE.info("Closing output stream");
-                out.close();
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        try {
-            if (in != null) {
-                LoggerUtil.INSTANCE.info("Closing input stream");
-                in.close();
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        try {
-            if (server != null) {
-                LoggerUtil.INSTANCE.info("Closing connection");
-                server.close();
-                LoggerUtil.INSTANCE.info("Closed socket");
-            }
+            connection.close();
         } catch (IOException e) {
-            e.printStackTrace();
+            LoggerUtil.INSTANCE.info("Could not close connection: " + e.getMessage());
+        }
+        if (server == connection) {
+            server = null;
+            out = null;
+            clientId = Constants.DEFAULT_CLIENT_ID;
+            knownUsers.clear();
+            LoggerUtil.INSTANCE.info("Disconnected");
         }
     }
 
+    /** Read keyboard input until quit or end-of-input, then close the connection. */
+    public void start() {
+        try (Scanner input = new Scanner(System.in)) {
+            while (isRunning && input.hasNextLine()) {
+                try {
+                    String text = input.nextLine();
+                    if (!processClientCommand(text)) {
+                        sendMessage(text);
+                    }
+                } catch (IOException e) {
+                    LoggerUtil.INSTANCE.info("Send failed: " + e.getMessage());
+                    closeServerConnection(server);
+                }
+            }
+        } finally {
+            closeServerConnection(server);
+        }
+    }
+
+    /** Start the course's terminal client. */
     public static void main(String[] args) {
-        Client client = Client.INSTANCE;
-        try {
-            client.start();
-        } catch (IOException e) {
-            LoggerUtil.INSTANCE.severe("Exception from main()");
-            e.printStackTrace();
-        }
+        Client.INSTANCE.start();
     }
 }
