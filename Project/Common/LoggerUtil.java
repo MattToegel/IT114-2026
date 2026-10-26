@@ -32,7 +32,7 @@ public enum LoggerUtil {
 
     /**
      * Sets the configuration for the logger.
-     * 
+     *
      * @param config the LoggerConfig object containing all the settings
      */
     public void setConfig(LoggerConfig config) {
@@ -118,7 +118,7 @@ public enum LoggerUtil {
 
         /**
          * Determines the name of the class that called the logging method.
-         * 
+         *
          * @return the name of the calling class
          */
         private static String getCallingClassName() {
@@ -192,7 +192,7 @@ public enum LoggerUtil {
          * Generates the stack trace string from the given Throwable.
          * The format includes the exception class name, message (if any),
          * and the stack trace elements up to the specified maxElements.
-         * 
+         *
          * @param throwable   the throwable to extract the stack trace from
          * @param maxElements the maximum number of stack trace elements to show
          * @return the formatted stack trace as a string
@@ -288,7 +288,7 @@ public enum LoggerUtil {
 
     /**
      * Logs a message at the specified level.
-     * 
+     *
      * @param level   the level of the log message
      * @param message the log message
      */
@@ -303,7 +303,7 @@ public enum LoggerUtil {
      * If the Object is a String, logs it as a message.
      * If the Object is a Throwable (Exception), logs its message and stack trace.
      * Otherwise, logs the Object's toString().
-     * 
+     *
      * @param level   the level of the log message
      * @param message the Object to log
      */
@@ -347,7 +347,7 @@ public enum LoggerUtil {
 
     /**
      * Logs an informational message.
-     * 
+     *
      * @param message the log message
      */
     public void info(String message) {
@@ -356,7 +356,7 @@ public enum LoggerUtil {
 
     /**
      * Logs an informational message, overloaded to accept an Object.
-     * 
+     *
      * @param message the Object to log
      */
     public void info(Object message) {
@@ -375,7 +375,7 @@ public enum LoggerUtil {
 
     /**
      * Logs a warning message.
-     * 
+     *
      * @param message the log message
      */
     public void warning(String message) {
@@ -384,7 +384,7 @@ public enum LoggerUtil {
 
     /**
      * Logs a warning message, overloaded to accept an Object.
-     * 
+     *
      * @param message the Object to log
      */
     public void warning(Object message) {
@@ -403,7 +403,7 @@ public enum LoggerUtil {
 
     /**
      * Logs a severe error message.
-     * 
+     *
      * @param message the log message
      */
     public void severe(String message) {
@@ -412,7 +412,7 @@ public enum LoggerUtil {
 
     /**
      * Logs a severe error message, overloaded to accept an Object.
-     * 
+     *
      * @param message the Object to log
      */
     public void severe(Object message) {
@@ -431,7 +431,7 @@ public enum LoggerUtil {
 
     /**
      * Logs a fine-grained informational message.
-     * 
+     *
      * @param message the log message
      */
     public void fine(String message) {
@@ -440,7 +440,7 @@ public enum LoggerUtil {
 
     /**
      * Logs a fine-grained informational message, overloaded to accept an Object.
-     * 
+     *
      * @param message the Object to log
      */
     public void fine(Object message) {
@@ -449,7 +449,7 @@ public enum LoggerUtil {
 
     /**
      * Logs a finer-grained informational message.
-     * 
+     *
      * @param message the log message
      */
     public void finer(String message) {
@@ -458,7 +458,7 @@ public enum LoggerUtil {
 
     /**
      * Logs a finer-grained informational message, overloaded to accept an Object.
-     * 
+     *
      * @param message the Object to log
      */
     public void finer(Object message) {
@@ -467,7 +467,7 @@ public enum LoggerUtil {
 
     /**
      * Logs the finest-grained informational message.
-     * 
+     *
      * @param message the log message
      */
     public void finest(String message) {
@@ -477,7 +477,7 @@ public enum LoggerUtil {
     /**
      * Logs the finest-grained informational message, overloaded to accept an
      * Object.
-     * 
+     *
      * @param message the Object to log
      */
     public void finest(Object message) {
@@ -500,7 +500,7 @@ public enum LoggerUtil {
 
         /**
          * Gets the file limit for the log files.
-         * 
+         *
          * @return the maximum size of each log file in bytes
          */
         public int getFileSizeLimit() {
@@ -509,7 +509,7 @@ public enum LoggerUtil {
 
         /**
          * Sets the file limit for the log files.
-         * 
+         *
          * @param fileLimit the maximum size of each log file in bytes
          */
         public void setFileSizeLimit(int fileLimit) {
@@ -518,7 +518,7 @@ public enum LoggerUtil {
 
         /**
          * Gets the number of rotating log files.
-         * 
+         *
          * @return the number of log files
          */
         public int getFileCount() {
@@ -527,7 +527,7 @@ public enum LoggerUtil {
 
         /**
          * Sets the number of rotating log files.
-         * 
+         *
          * @param fileCount the number of log files
          */
         public void setFileCount(int fileCount) {
@@ -536,7 +536,7 @@ public enum LoggerUtil {
 
         /**
          * Gets the file location for log files.
-         * 
+         *
          * @return the file location for logs
          */
         public String getLogLocation() {
@@ -545,7 +545,7 @@ public enum LoggerUtil {
 
         /**
          * Sets the file location for log files.
-         * 
+         *
          * @param logLocation the file location for logs
          */
         public void setLogLocation(String logLocation) {
@@ -554,7 +554,7 @@ public enum LoggerUtil {
 
         /**
          * Gets the log level for file logging.
-         * 
+         *
          * @return the log level for file logging
          */
         public Level getFileLogLevel() {
@@ -563,7 +563,7 @@ public enum LoggerUtil {
 
         /**
          * Sets the log level for file logging.
-         * 
+         *
          * @param fileLogLevel the log level for file logging
          */
         public void setFileLogLevel(Level fileLogLevel) {
@@ -572,7 +572,7 @@ public enum LoggerUtil {
 
         /**
          * Gets the log level for console logging.
-         * 
+         *
          * @return the log level for console logging
          */
         public Level getConsoleLogLevel() {
@@ -581,7 +581,7 @@ public enum LoggerUtil {
 
         /**
          * Sets the log level for console logging.
-         * 
+         *
          * @param consoleLogLevel the log level for console logging
          */
         public void setConsoleLogLevel(Level consoleLogLevel) {
@@ -590,7 +590,7 @@ public enum LoggerUtil {
 
         /**
          * Gets the stack trace limit for logging.
-         * 
+         *
          * @return the maximum number of stack trace elements to show
          */
         public int getStackTraceLimit() {
@@ -599,7 +599,7 @@ public enum LoggerUtil {
 
         /**
          * Sets the stack trace limit for logging.
-         * 
+         *
          * @param stackTraceLimit the maximum number of stack trace elements to show
          */
         public void setStackTraceLimit(int stackTraceLimit) {
@@ -609,7 +609,7 @@ public enum LoggerUtil {
 
     /**
      * Example usage
-     * 
+     *
      * @param args
      */
     public static void main(String[] args) {
