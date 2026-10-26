@@ -15,6 +15,7 @@ public class Server {
     private final List<ServerThread> disconnectedBuffer = new ArrayList<>();
     private volatile boolean isRunning = true;
     private volatile ServerSocket listener;
+    private long nextClientId = 1;
 
     /** Register resource cleanup for JVM shutdown. */
     public Server() {
@@ -60,8 +61,26 @@ public class Server {
         if (!client.isRunning()) {
             return;
         }
+        client.setClientId(nextAvailableClientId());
+        if (!client.sendClientId()) {
+            client.disconnect();
+            return;
+        }
         connectedClients.put(client.getClientId(), client);
         sendMessage("Server: " + client.getDisplayName() + " connected");
+    }
+
+    /** Choose a positive ID that is not assigned to a connected client. */
+    private long nextAvailableClientId() {
+        while (true) {
+            if (nextClientId <= 0) {
+                nextClientId = 1;
+            }
+            long candidate = nextClientId++;
+            if (!connectedClients.containsKey(candidate)) {
+                return candidate;
+            }
+        }
     }
 
     /** Close this connection and queue one leave event on its first removal. */

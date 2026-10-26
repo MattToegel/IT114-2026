@@ -15,10 +15,12 @@ public class Client {
     private volatile Socket server;
     private ObjectOutputStream out;
     private boolean isRunning = true;
+    private String clientName;
+    private long clientId = Constants.DEFAULT_CLIENT_ID;
 
     private enum Command {
         CONNECT("/connect"), DISCONNECT("/disconnect"), QUIT("/quit"),
-        USERS("/users"), REVERSE("/reverse");
+        USERS("/users"), REVERSE("/reverse"), SET_NAME("/name");
 
         private final String trigger;
 
@@ -83,6 +85,10 @@ public class Client {
         String arguments = parts.length == 2 ? parts[1] : "";
         switch (command) {
             case CONNECT:
+                if (clientName == null || clientName.isBlank()) {
+                    System.out.println("Set a name with /name <name> before connecting");
+                    return true;
+                }
                 String[] endpoint = arguments.split(":", -1);
                 if (endpoint.length != 2 || endpoint[0].isBlank()) {
                     System.out.println("Use /connect <host>:<port>");
@@ -93,12 +99,25 @@ public class Client {
                     if (port < 1 || port > 65535) {
                         System.out.println("Port must be between 1 and 65535");
                     } else {
-                        connect(endpoint[0], port);
+                        if (connect(endpoint[0], port)) {
+                            sendConnectionData();
+                        }
                     }
                 } catch (NumberFormatException e) {
                     System.out.println("Port must be a whole number");
                 }
                 return true;
+            case SET_NAME:
+                if (isConnected()) {
+                    System.out.println("Disconnect before changing your name");
+                } else if (arguments.isBlank()) {
+                    System.out.println("Use /name <name>");
+                } else {
+                    clientName = arguments;
+                    System.out.println("Name set to " + arguments);
+                }
+                return true;
+
             case USERS:
                 sendAction(PayloadType.USERS, null);
                 return true;
@@ -115,6 +134,14 @@ public class Client {
             default:
                 return false;
         }
+    }
+
+    /** Send the chosen name after the streams open. */
+    private void sendConnectionData() throws IOException {
+        ConnectionPayload payload = new ConnectionPayload();
+        payload.setPayloadType(PayloadType.CLIENT_CONNECT);
+        payload.setClientName(clientName);
+        sendToServer(payload);
     }
 
     /** Send ordinary chat text to the server. */
@@ -185,6 +212,9 @@ public class Client {
             case USERS:
                 processUsers((UserListPayload) payload);
                 break;
+            case CLIENT_ID:
+                processClientId((ConnectionPayload) payload);
+                break;
             case MESSAGE:
                 processMessage(payload);
                 break;
@@ -203,6 +233,12 @@ public class Client {
             String suffix = user.getClientId() == userList.getClientId() ? " (you)" : "";
             System.out.println(user.getDisplayName() + suffix);
         }
+    }
+
+    /** Store the identity assigned to this connection. */
+    private void processClientId(ConnectionPayload confirmation) {
+        clientId = confirmation.getClientId();
+        System.out.println("Connected as " + confirmation.getClientName() + "#" + clientId);
     }
 
     /** Display a chat message received from the server. */
@@ -228,6 +264,7 @@ public class Client {
         if (server == connection) {
             server = null;
             out = null;
+            clientId = Constants.DEFAULT_CLIENT_ID;
             System.out.println("Disconnected");
         }
     }

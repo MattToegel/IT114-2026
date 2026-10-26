@@ -11,7 +11,8 @@ import M4.MCCS.Part2.Constants;
 /** Owns one socket, its object streams, read loop, and resource cleanup. */
 public class ServerThread extends Thread {
     private final Socket client;
-    private final User user = new User(threadId(), "Client");
+    private volatile User user = new User(Constants.DEFAULT_CLIENT_ID, null);
+    private final java.util.Timer nameTimer = new java.util.Timer(true);
     private final Server server;
     private final java.util.function.Consumer<ServerThread> onInitializationComplete;
     private volatile ObjectOutputStream out;
@@ -45,6 +46,30 @@ public class ServerThread extends Thread {
         return user;
     }
 
+    /** Assign the ID while retaining the accepted name. */
+    protected void setClientId(long value) {
+        user = new User(value, user.getClientName());
+    }
+
+    /** Return the name stored with this connection's identity. */
+    protected String getClientName() {
+        return user.getClientName();
+    }
+
+    /** Report whether the server has assigned a positive client ID. */
+    private boolean isRegistered() {
+        return getClientId() > 0;
+    }
+
+    /** Confirm this connection's assigned identity. */
+    protected boolean sendClientId() {
+        ConnectionPayload payload = new ConnectionPayload();
+        payload.setPayloadType(PayloadType.CLIENT_ID);
+        payload.setClientId(getClientId());
+        payload.setClientName(getClientName());
+        return sendToClient(payload);
+    }
+
     /** Write a diagnostic labeled with this client's identity. */
     private void info(String message) {
         System.out.println(getDisplayName() + ": " + message);
@@ -67,6 +92,9 @@ public class ServerThread extends Thread {
             return;
         }
         switch (payload.getPayloadType()) {
+            case CLIENT_CONNECT:
+                processClientConnect((ConnectionPayload) payload);
+                break;
             case MESSAGE:
                 processMessage(payload);
                 break;
@@ -87,24 +115,45 @@ public class ServerThread extends Thread {
 
     /** Read chat data and pass ordinary text to the server handler. */
     private void processMessage(Payload payload) {
-        if (payload.getMessage() != null) {
+        if (isRegistered() && payload.getMessage() != null) {
             server.handleMessage(this, payload.getMessage());
         }
     }
 
     /** Read the requested text before asking the server to reverse it. */
     private void processReverse(Payload payload) {
+        if (!isRegistered()) {
+            return;
+        }
         server.handleReverseText(this, payload.getMessage() == null ? "" : payload.getMessage());
     }
 
     /** Ask the server for the connected-user list. */
     private void processGetUserList() {
+        if (!isRegistered()) {
+            return;
+        }
         server.handleGetUserList(this);
     }
 
     /** Apply this client's request to disconnect. */
     private void processDisconnect() {
         server.handleDisconnect(this);
+    }
+
+    /** Accept one valid name, then register this initialized connection. */
+    private void processClientConnect(ConnectionPayload payload) {
+        if (isRegistered()) {
+            return;
+        }
+        String proposed = payload.getClientName();
+        if (proposed == null || proposed.isBlank()) {
+            disconnect();
+            return;
+        }
+        user = new User(getClientId(), proposed.trim());
+        nameTimer.cancel();
+        onInitialized();
     }
 
     /** Write this payload unchanged; success means the write completed. */
@@ -145,7 +194,14 @@ public class ServerThread extends Thread {
                 try (ObjectInputStream input = new ObjectInputStream(connection.getInputStream())) {
                     connection.setSoTimeout(0);
                     isRunning = true;
-                    onInitialized();
+                    nameTimer.schedule(new java.util.TimerTask() {
+                        @Override
+                        public void run() {
+                            if (getClientName() == null) {
+                                disconnect();
+                            }
+                        }
+                    }, Constants.SETUP_TIMEOUT_MS);
                     while (isRunning) {
                         try {
                             processPayload((Payload) input.readObject());
@@ -165,6 +221,7 @@ public class ServerThread extends Thread {
             }
         } finally {
             disconnect();
+            nameTimer.cancel();
             // Notify the server after this handler closes its connection.
             onDisconnected();
         }

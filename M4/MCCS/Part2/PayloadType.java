@@ -5,5 +5,7 @@ public enum PayloadType {
     MESSAGE,
     REVERSE,
     USERS,
-    DISCONNECT
+    DISCONNECT,
+    CLIENT_CONNECT,
+    CLIENT_ID
 }

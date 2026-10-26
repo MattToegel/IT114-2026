@@ -1,6 +1,6 @@
 # Multi-Client Chat Server Part 2
 
-Checkpoint: Typed chat. Minimum JDK: 26.
+Checkpoint: Client identity. Minimum JDK: 26.
 
 Part 1 stays in `M4/MCCS/Part1`. Build Part 2 in the separate `M4/MCCS/Part2` package so the two versions can be compared.
 
@@ -15,7 +15,7 @@ java M4.MCCS.Part2.Server
 java M4.MCCS.Part2.Client
 ```
 
-In each client, enter `/connect localhost:3000`. Send ordinary chat text or use `/reverse MiXeD`, `/users`, `/disconnect`, and `/quit`.
+In each client, enter `/name Alice` (use a different name per client), then `/connect localhost:3000`. Send ordinary chat text or use `/reverse MiXeD`, `/users`, `/disconnect`, and `/quit`.
 
 Check chat and reversal with two clients. The `/users` reply must reach only its requester.
 
