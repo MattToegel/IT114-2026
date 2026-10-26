@@ -1,7 +1,8 @@
 package Project.Common;
 
+/** Public stage of the small teaching session. */
 public enum Phase {
-    INACTIVE, // game session hasn't been triggered yet
-    READY, // pre-setup phase
-    IN_PROGRESS // example phase that'll be renamed/removed later
+    INACTIVE,
+    READY,
+    IN_PROGRESS
 }
