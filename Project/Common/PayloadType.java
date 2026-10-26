@@ -1,26 +1,25 @@
 package Project.Common;
 
+/** The action carried by a Payload. */
 public enum PayloadType {
-    CLIENT_CONNECT, // client requesting to connect to server (passing of initialization data
-                    // [name])
-    CLIENT_ID, // server sending client id\
-    DISCONNECT, // distinct disconnect action
+    MESSAGE,
     REVERSE,
-    MESSAGE, // sender and message
-    SERVER_JOIN, // server notifying recipient of a new client joining
-                 // (includes new client's id and name)
-    SERVER_LEAVE, // server notifying recipient of a client leaving
-                  // (includes leaving client's id and name)
-    SERVER_SYNC, // server notifying recipient of existing client
-                 // (includes existing client's id and name) (silently)
-    READY, // client signals ready-check participation
-    TURN, // client submits a turn action
-    GAME_PHASE_SYNC, // server syncs current game phase to clients
-    PLAYER_READY_STATUS, // server syncs whether a user is ready
-    PLAYER_TURN_STATUS, // server syncs whether a user already took a turn
-    POINTS, // server syncs a user's points
-    GUESS, // Used by client to send guess and server to confirm guess was received
-    CURRENT_TURN, // server syncs which client's turn it currently is
-    GRID_SEED_SYNC, // server syncs current grid seed and dimensions
-    GRID_CELL_SYNC, // server syncs a single grid cell value
+    USERS,
+    DISCONNECT,
+    CLIENT_CONNECT,
+    CLIENT_ID,
+    SERVER_JOIN,
+    SERVER_LEAVE,
+    SERVER_SYNC,
+    READY,
+    RESET,
+    PLAYER_READY_STATUS,
+    GAME_PHASE_SYNC,
+    TURN_STATUS,
+    POINTS,
+    ROUND_SYNC,
+    CURRENT_TURN,
+    GRID_SEED_SYNC,
+    GRID_ACTION,
+    GRID_CELL_SYNC
 }
