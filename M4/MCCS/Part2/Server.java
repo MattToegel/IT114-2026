@@ -66,8 +66,40 @@ public class Server {
             client.disconnect();
             return;
         }
+        if (!syncExistingUsersTo(client) || !client.isRunning()) {
+            return;
+        }
         connectedClients.put(client.getClientId(), client);
-        sendMessage("Server: " + client.getDisplayName() + " connected");
+        sendServerJoin(client);
+    }
+
+    /** Send the current user-list snapshot to one connection. */
+    private boolean syncExistingUsersTo(ServerThread recipient) {
+        List<User> users = new ArrayList<>();
+        for (ServerThread existing : connectedClients.values()) {
+            users.add(existing.getUser());
+        }
+        if (!sendServerSync(recipient, users)) {
+            recipient.disconnect();
+            return false;
+        }
+        return true;
+    }
+
+    /** Bundle the existing-user snapshot for one new or requesting client. */
+    private boolean sendServerSync(ServerThread recipient, List<User> users) {
+        UserListPayload payload = new UserListPayload(users);
+        payload.setPayloadType(PayloadType.SERVER_SYNC);
+        return recipient.sendToClient(payload);
+    }
+
+    /** Bundle a join event and announce it to the connected clients. */
+    private void sendServerJoin(ServerThread client) {
+        ConnectionPayload payload = new ConnectionPayload();
+        payload.setPayloadType(PayloadType.SERVER_JOIN);
+        payload.setClientId(client.getClientId());
+        payload.setClientName(client.getClientName());
+        sendBroadcast(payload);
     }
 
     /** Choose a positive ID that is not assigned to a connected client. */
@@ -102,24 +134,12 @@ public class Server {
         processDisconnectedBuffer();
     }
 
-    /** Send structured user data only to the client that requested it. */
+    /** Send a requested user list through the same structured snapshot path. */
     protected synchronized void handleGetUserList(ServerThread requester) {
-        List<User> users = new ArrayList<>();
-        for (ServerThread client : connectedClients.values()) {
-            users.add(client.getUser());
-        }
-        if (!sendUserList(requester, users)) {
+        if (!syncExistingUsersTo(requester)) {
             removeClient(requester);
             processDisconnectedBuffer();
         }
-    }
-
-    /** Bundle the requested user list and send it only to the requester. */
-    private boolean sendUserList(ServerThread requester, List<User> users) {
-        UserListPayload payload = new UserListPayload(users);
-        payload.setPayloadType(PayloadType.USERS);
-        payload.setClientId(requester.getClientId());
-        return requester.sendToClient(payload);
     }
 
     /** Format client chat before sending it to the connected clients. */
@@ -169,12 +189,10 @@ public class Server {
         }
     }
 
-    /** Bundle a leave message without starting another cleanup pass. */
+    /** Send the typed leave event without starting another cleanup pass. */
     private void sendLeaveNotice(ServerThread departed) {
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.MESSAGE);
-        payload.setMessage("Server: " + departed.getDisplayName() + " disconnected");
-        sendPass(recipient -> recipient.sendToClient(payload));
+        sendPass(recipient -> recipient.sendClientStatus(
+                departed.getClientId(), departed.getClientName(), PayloadType.SERVER_LEAVE));
     }
 
     /** Validate the optional port argument and start the server. */

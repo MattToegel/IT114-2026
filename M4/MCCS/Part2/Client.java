@@ -17,6 +17,7 @@ public class Client {
     private boolean isRunning = true;
     private String clientName;
     private long clientId = Constants.DEFAULT_CLIENT_ID;
+    private final java.util.concurrent.ConcurrentHashMap<Long, User> knownUsers = new java.util.concurrent.ConcurrentHashMap<>();
 
     private enum Command {
         CONNECT("/connect"), DISCONNECT("/disconnect"), QUIT("/quit"),
@@ -119,7 +120,8 @@ public class Client {
                 return true;
 
             case USERS:
-                sendAction(PayloadType.USERS, null);
+                System.out.println("Known clients:");
+                knownUsers.values().forEach(user -> System.out.println(user.getDisplayName()));
                 return true;
             case REVERSE:
                 sendReverse(arguments);
@@ -209,11 +211,17 @@ public class Client {
             return;
         }
         switch (payload.getPayloadType()) {
-            case USERS:
-                processUsers((UserListPayload) payload);
+            case SERVER_SYNC:
+                processServerSync((UserListPayload) payload);
                 break;
             case CLIENT_ID:
                 processClientId((ConnectionPayload) payload);
+                break;
+            case SERVER_JOIN:
+                processServerJoin((ConnectionPayload) payload);
+                break;
+            case SERVER_LEAVE:
+                processServerLeave((ConnectionPayload) payload);
                 break;
             case MESSAGE:
                 processMessage(payload);
@@ -226,19 +234,33 @@ public class Client {
         }
     }
 
-    /** Display the structured list returned for a USERS request. */
-    private void processUsers(UserListPayload userList) {
-        System.out.println("Connected users:");
+    /** Store the initial list of users already connected to the server. */
+    private void processServerSync(UserListPayload userList) {
         for (User user : userList.getUsers()) {
-            String suffix = user.getClientId() == userList.getClientId() ? " (you)" : "";
-            System.out.println(user.getDisplayName() + suffix);
+            knownUsers.put(user.getClientId(), user);
         }
     }
 
     /** Store the identity assigned to this connection. */
     private void processClientId(ConnectionPayload confirmation) {
         clientId = confirmation.getClientId();
+        knownUsers.put(clientId, new User(clientId, confirmation.getClientName()));
         System.out.println("Connected as " + confirmation.getClientName() + "#" + clientId);
+    }
+
+    /** Add the newly connected user to the local list. */
+    private void processServerJoin(ConnectionPayload connection) {
+        User user = new User(connection.getClientId(), connection.getClientName());
+        knownUsers.putIfAbsent(user.getClientId(), user);
+        System.out.println(user.getDisplayName() + " joined");
+    }
+
+    /** Remove a departed user and report the departure once. */
+    private void processServerLeave(ConnectionPayload connection) {
+        User user = new User(connection.getClientId(), connection.getClientName());
+        if (knownUsers.remove(user.getClientId()) != null) {
+            System.out.println(user.getDisplayName() + " left");
+        }
     }
 
     /** Display a chat message received from the server. */
@@ -265,6 +287,7 @@ public class Client {
             server = null;
             out = null;
             clientId = Constants.DEFAULT_CLIENT_ID;
+            knownUsers.clear();
             System.out.println("Disconnected");
         }
     }

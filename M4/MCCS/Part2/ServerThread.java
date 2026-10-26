@@ -70,6 +70,15 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
+    /** Send one presence payload through this connection. */
+    protected boolean sendClientStatus(long id, String name, PayloadType type) {
+        ConnectionPayload payload = new ConnectionPayload();
+        payload.setPayloadType(type);
+        payload.setClientId(id);
+        payload.setClientName(name);
+        return sendToClient(payload);
+    }
+
     /** Write a diagnostic labeled with this client's identity. */
     private void info(String message) {
         System.out.println(getDisplayName() + ": " + message);

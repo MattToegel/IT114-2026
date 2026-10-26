@@ -7,5 +7,8 @@ public enum PayloadType {
     USERS,
     DISCONNECT,
     CLIENT_CONNECT,
-    CLIENT_ID
+    CLIENT_ID,
+    SERVER_JOIN,
+    SERVER_LEAVE,
+    SERVER_SYNC
 }
