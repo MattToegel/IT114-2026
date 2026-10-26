@@ -1,14 +1,30 @@
-# Chat Part 1
+# Multi-Client Chat Server Part 2
 
-Minimum JDK: 26
+Checkpoint: Typed chat. Minimum JDK: 26.
 
-Run from the personal repository root. Preserve earlier lesson work and follow the presentation's focused changes before comparing this completed checkpoint.
+Part 1 stays in `M4/MCCS/Part1`. Build Part 2 in the separate `M4/MCCS/Part2` package so the two versions can be compared.
+
+## Run
+
+From the repository root:
 
 ```bash
-javac M4/MCCS/Part1/*.java
-java M4.MCCS.Part1.Server
-# Separate client terminals:
-java M4.MCCS.Part1.Client
+javac M4/MCCS/Part2/*.java
+java M4.MCCS.Part2.Server
+# In separate client terminals:
+java M4.MCCS.Part2.Client
 ```
 
-Use `/connect localhost:3000`. Chat reaches both clients; `/users` requests a reply only for the requesting client. Use `/disconnect` to close one connection and `/quit` to exit the client.
+In each client, enter `/connect localhost:3000`. Send ordinary chat text or use `/reverse MiXeD`, `/users`, `/disconnect`, and `/quit`.
+
+Check chat and reversal with two clients. The `/users` reply must reach only its requester.
+
+## Lesson Progression
+
+1. Typed chat: Payload, PayloadType, UserListPayload and TextFX
+2. Identity: chosen names and server-assigned positive IDs
+3. Presence: initial synchronization and join/leave updates
+
+Each step is a separate commit on this branch. Payload data stays in send/process methods, and processPayload routes to the matching process method. ServerThread holds a User reference.
+
+To run the terminal-color utility by itself: `java M4.MCCS.Part2.TextFX`.
