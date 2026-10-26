@@ -1,14 +1,18 @@
-# Chat Part 1
+# Multi-Client Chat Server Part 2
 
-Minimum JDK: 26
+Minimum JDK: 26. Part 1 remains unchanged in `M4/MCCS/Part1`; Part 2 uses `M4/MCCS/Part2`.
 
-Run from the personal repository root. Preserve earlier lesson work and follow the presentation's focused changes before comparing this completed checkpoint.
+Starting checkpoint: a copy of Part 1 with only package/import names changed.
 
-```bash
-javac M4/MCCS/Part1/*.java
-java M4.MCCS.Part1.Server
-# Separate client terminals:
-java M4.MCCS.Part1.Client
+## Run
+
+From the repository root:
+
+```sh
+javac M4/MCCS/Part2/*.java
+java M4.MCCS.Part2.Server
+# In separate terminals:
+java M4.MCCS.Part2.Client
 ```
 
-Use `/connect localhost:3000`. Chat reaches both clients; `/users` requests a reply only for the requesting client. Use `/disconnect` to close one connection and `/quit` to exit the client.
+Enter `/connect localhost:3000` in each client. Send chat text or use `/reverse MiXeD`, `/users`, `/disconnect`, and `/quit`.
