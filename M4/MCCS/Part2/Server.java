@@ -15,6 +15,7 @@ public class Server {
     private final List<ServerThread> disconnectedBuffer = new ArrayList<>();
     private volatile boolean isRunning = true;
     private volatile ServerSocket listener;
+    private long nextClientId = 1;
 
     /** Register resource cleanup for JVM shutdown. */
     public Server() {
@@ -55,13 +56,75 @@ public class Server {
         }
     }
 
-    /** Register a handler only after its object streams are ready. */
+    /**
+     * Receives ServerThread's initialization callback after its streams open and
+     * processClientConnect() accepts a name. Assigns and confirms a positive ID
+     * before adding this connection to the active clients.
+     *
+     * @param client the initialized connection joining the server
+     */
     private synchronized void onServerThreadInitialized(ServerThread client) {
         if (!client.isRunning()) {
             return;
         }
+        client.setClientId(nextAvailableClientId());
+        if (!client.sendClientId()) {
+            client.disconnect();
+            return;
+        }
+        if (!syncExistingUsersTo(client) || !client.isRunning()) {
+            return;
+        }
         connectedClients.put(client.getClientId(), client);
-        broadcast(null, client.getDisplayName() + " connected");
+        sendServerJoin(client);
+    }
+
+    /**
+     * Collects the current User records for initialization or a /users request.
+     * The recipient's ServerThread bundles the snapshot; a failed send closes it.
+     *
+     * @param recipient the connection that needs the snapshot
+     * @return true if the local write completed, not a delivery acknowledgment
+     */
+    private boolean syncExistingUsersTo(ServerThread recipient) {
+        List<User> users = new ArrayList<>();
+        for (ServerThread existing : connectedClients.values()) {
+            users.add(existing.getUser());
+        }
+        if (!recipient.sendServerSync(users)) {
+            recipient.disconnect();
+            return false;
+        }
+        return true;
+    }
+
+
+    /**
+     * Called by onServerThreadInitialized() after the newcomer is registered.
+     * Asks each recipient's ServerThread to bundle the new User as a join event.
+     *
+     * @param client the newly registered connection
+     */
+    private void sendServerJoin(ServerThread client) {
+        sendOrDisconnect(recipient -> recipient.sendServerJoin(client.getUser()));
+    }
+
+    /**
+     * Called while registering a connection to choose an unused positive ID.
+     * Restarts at 1 after overflow so reserved nonpositive IDs are never assigned.
+     *
+     * @return a positive ID not currently used by a connected client
+     */
+    private long nextAvailableClientId() {
+        while (true) {
+            if (nextClientId <= 0) {
+                nextClientId = 1;
+            }
+            long candidate = nextClientId++;
+            if (!connectedClients.containsKey(candidate)) {
+                return candidate;
+            }
+        }
     }
 
     /** Close this connection and queue one leave event on its first removal. */
@@ -72,43 +135,75 @@ public class Server {
         }
     }
 
-    /** Remove a disconnected client and send queued leave notices. */
+    /**
+     * Handles an explicit client disconnect request from
+     * {@code ServerThread.processDisconnect()}. Uses the same cleanup as a lost connection.
+     *
+     * @param client the connection that requested disconnection
+     */
     protected synchronized void handleDisconnect(ServerThread client) {
+        onServerThreadDisconnected(client);
+    }
+
+    /**
+     * Cleans up after ServerThread reports a closed connection or handleDisconnect()
+     * handles a client request. Repeated calls do not produce duplicate leave notices.
+     *
+     * @param client the connection to remove
+     */
+    protected synchronized void onServerThreadDisconnected(ServerThread client) {
         removeClient(client);
         processDisconnectedBuffer();
     }
 
-    /** Unicast the current ready-client list to the requester. */
+    /**
+     * Handles a /users request from ServerThread.processGetUserList().
+     * Reuses the initial-sync path to send a current snapshot only to the requester.
+     *
+     * @param requester the connection asking for the current user list
+     */
     protected synchronized void handleGetUserList(ServerThread requester) {
-        StringBuilder list = new StringBuilder("Connected users:\n");
-        for (ServerThread client : connectedClients.values()) {
-            list.append(client.getDisplayName());
-            if (client == requester) {
-                list.append(" (you)");
-            }
-            list.append("\n");
-        }
-        if (!requester.sendToClient(list.toString().stripTrailing())) {
+        if (!syncExistingUsersTo(requester)) {
             removeClient(requester);
             processDisconnectedBuffer();
         }
     }
 
-    /** Broadcast a received chat message, including to its sender. */
+    /**
+     * Handles a client's intent to send chat, passed here by
+     * {@code ServerThread.processMessage()} after it reads the payload.
+     * Formats ordinary text and asks each recipient's ServerThread to send it.
+     *
+     * @param sender the connection that requested the action
+     * @param text the chat text supplied by that client
+     */
     protected synchronized void handleMessage(ServerThread sender, String text) {
-        broadcast(sender, text);
+        String message = sender.getDisplayName() + ": " + text;
+        sendBroadcast(sender.getClientId(), message);
     }
 
-    /** Reverse the requested text before broadcasting it. */
+    /**
+     * Handles a client's reverse request, passed here by
+     * {@code ServerThread.processReverse()} as ordinary text.
+     * Broadcasts the reversed result using the requesting client's identity.
+     *
+     * @param sender the connection that requested the reversal
+     * @param text the text to reverse
+     */
     protected synchronized void handleReverseText(ServerThread sender, String text) {
-        broadcast(sender, new StringBuilder(text).reverse().toString());
+        String message = sender.getDisplayName() + ": " + new StringBuilder(text).reverse();
+        sendBroadcast(sender.getClientId(), message);
     }
 
-    /** Label a message and send it to every ready handler. */
-    private void broadcast(ServerThread sender, String message) {
-        String label = sender == null ? "Server" : sender.getDisplayName();
-        String formatted = label + ": " + message;
-        sendOrDisconnect(recipient -> recipient.sendToClient(formatted));
+    /**
+     * Routes chat or a server notice to all connected clients.
+     * ServerThread.sendMessage() creates the payload for each recipient.
+     *
+     * @param clientId the sender's ID, or DEFAULT_CLIENT_ID for a server notice
+     * @param message the display text to send
+     */
+    private void sendBroadcast(long clientId, String message) {
+        sendOrDisconnect(recipient -> recipient.sendMessage(clientId, message));
     }
 
     /** Try each current recipient and queue failed connections for removal. */
@@ -126,14 +221,28 @@ public class Server {
         processDisconnectedBuffer();
     }
 
-    /** Drain leave notices without recursively broadcasting further failures. */
+    /**
+     * Finishes cleanup after a send pass or a connection-close callback.
+     * Drains queued departures, including any further failures found while sending
+     * leave notices, instead of starting a recursive cleanup call.
+     */
     private void processDisconnectedBuffer() {
         while (!disconnectedBuffer.isEmpty()) {
             ServerThread departed = disconnectedBuffer.remove(0);
-            String notice = "Server: " + departed.getDisplayName() + " disconnected";
             System.out.println("Removed " + departed.getDisplayName());
-            sendPass(recipient -> recipient.sendToClient(notice));
+            sendLeaveNotice(departed);
         }
+    }
+
+    /**
+     * Called by processDisconnectedBuffer() for each removed connection.
+     * Asks the remaining ServerThreads to send the departure; sendPass() queues
+     * any further failures for the existing cleanup loop.
+     *
+     * @param departed the removed connection whose User identifies the departure
+     */
+    private void sendLeaveNotice(ServerThread departed) {
+        sendPass(recipient -> recipient.sendLeaveNotice(departed.getUser()));
     }
 
     /** Validate the optional port argument and start the server. */
