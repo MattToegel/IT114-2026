@@ -1,145 +1,88 @@
 package Project.Common;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 
+/** A seeded rectangular grid shared by server and displaying clients. */
 public class Grid {
-    private Cell[][] cells;
+    private final int width;
+    private final int height;
+    private final Cell[][] cells;
 
-    public void setSize(int x, int y) {
-        cells = new Cell[x][y];
-        for (int i = 0; i < x; i++) {
-            for (int j = 0; j < y; j++) {
-                cells[i][j] = new Cell();
+    public Grid(int width, int height, long seed) {
+        if (width < 1 || height < 1) {
+            throw new IllegalArgumentException("Grid dimensions must be positive");
+        }
+        this.width = width;
+        this.height = height;
+        cells = new Cell[height][width];
+        Random random = new Random(seed);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                cells[y][x] = new Cell(random.nextInt(10));
             }
         }
     }
 
     public int getWidth() {
-        return cells == null ? 0 : cells.length;
+        return width;
     }
 
     public int getHeight() {
-        return cells == null || cells.length == 0 ? 0 : cells[0].length;
+        return height;
     }
 
-    public void clear() {
-        if (cells == null) {
-            return;
-        }
-        for (int i = 0; i < cells.length; i++) {
-            for (int j = 0; j < cells[i].length; j++) {
-                cells[i][j] = null;
-            }
-        }
-        cells = null;
-    }
-
-    public void setToZero() {
-        if (cells == null) {
-            return;
-        }
-        for (int i = 0; i < cells.length; i++) {
-            for (int j = 0; j < cells[i].length; j++) {
-                cells[i][j].setValue(0);
-            }
-        }
-    }
-
-    public void setToRandom(long seed) {
-        if (cells == null) {
-            return;
-        }
-        Random rand = new Random(seed);
-        for (int i = 0; i < cells.length; i++) {
-            for (int j = 0; j < cells[i].length; j++) {
-                cells[i][j].setValue(rand.nextInt(10));
-            }
-        }
+    public boolean contains(int x, int y) {
+        return x >= 0 && x < width && y >= 0 && y < height;
     }
 
     public int getValue(int x, int y) {
-        if (!isInBounds(x, y)) {
-            return 0;
-        }
-        return cells[x][y].getValue();
+        return cells[y][x].getValue();
     }
 
     public void setValue(int x, int y, int value) {
-        if (!isInBounds(x, y)) {
-            return;
-        }
-        cells[x][y].setValue(value);
+        cells[y][x].setValue(value);
     }
 
-    public void applyModifier(int mod, int x, int y) {
-        if (!isInBounds(x, y)) {
-            return;
+    /** Apply a modifier to the center and cardinal neighbors in bounds. */
+    public List<int[]> applyModifier(int x, int y, int amount) {
+        if (!contains(x, y)) {
+            throw new IllegalArgumentException("Target is outside the grid");
         }
-        cells[x][y].addValue(mod);
-
-        if (y > 0) {
-            cells[x][y - 1].addValue(mod);
-        }
-        if (y < cells[x].length - 1) {
-            cells[x][y + 1].addValue(mod);
-        }
-        if (x > 0) {
-            cells[x - 1][y].addValue(mod);
-        }
-        if (x < cells.length - 1) {
-            cells[x + 1][y].addValue(mod);
-        }
-    }
-
-    public int countOdd(int x, int y) {
-        if (!isInBounds(x, y)) {
-            return 0;
-        }
-        int oddCount = 0;
-
-        if (cells[x][y].getValue() % 2 != 0) {
-            oddCount++;
-        }
-        if (y > 0 && cells[x][y - 1].getValue() % 2 != 0) {
-            oddCount++;
-        }
-        if (y < cells[x].length - 1 && cells[x][y + 1].getValue() % 2 != 0) {
-            oddCount++;
-        }
-        if (x > 0 && cells[x - 1][y].getValue() % 2 != 0) {
-            oddCount++;
-        }
-        if (x < cells.length - 1 && cells[x + 1][y].getValue() % 2 != 0) {
-            oddCount++;
-        }
-
-        return oddCount;
-    }
-
-    public String toGridString() {
-        if (cells == null || cells.length == 0 || cells[0].length == 0) {
-            return "[grid not initialized]";
-        }
-
-        StringBuilder sb = new StringBuilder();
-        for (int y = 0; y < cells[0].length; y++) {
-            for (int x = 0; x < cells.length; x++) {
-                sb.append("[").append(cells[x][y].getValue()).append("]");
-            }
-            if (y < cells[0].length - 1) {
-                sb.append("\n");
+        int[][] offsets = {{0, 0}, {-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+        List<int[]> affected = new ArrayList<>();
+        for (int[] offset : offsets) {
+            int cellX = x + offset[0];
+            int cellY = y + offset[1];
+            if (contains(cellX, cellY)) {
+                cells[cellY][cellX].addValue(amount);
+                affected.add(new int[]{cellX, cellY});
             }
         }
-        return sb.toString();
+        return affected;
     }
 
-    private boolean isInBounds(int x, int y) {
-        return cells != null
-                && x >= 0
-                && y >= 0
-                && x < cells.length
-                && cells.length > 0
-                && y < cells[0].length
-                && cells[x][y] != null;
+    /** Count affected cells whose updated value is odd. */
+    public int countOdd(List<int[]> affected) {
+        int count = 0;
+        for (int[] position : affected) {
+            if (getValue(position[0], position[1]) % 2 != 0) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    @Override
+    public String toString() {
+        StringBuilder result = new StringBuilder();
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                result.append(getValue(x, y)).append(' ');
+            }
+            result.append(System.lineSeparator());
+        }
+        return result.toString();
     }
 }

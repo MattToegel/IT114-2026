@@ -1,16 +1,19 @@
 package Project.Common;
 
-import java.util.ArrayList;
 import java.util.List;
 
+/** Private snapshot of one player's card IDs. */
 public class CardHandPayload extends Payload {
-    private List<Integer> cardIds = new ArrayList<>();
+    private final List<Integer> cardIds;
 
-    public List<Integer> getCardIds() {
-        return cardIds;
+    public CardHandPayload(List<Integer> cardIds) {
+        this.cardIds = List.copyOf(cardIds);
     }
 
-    public void setCardIds(List<Integer> cardIds) {
-        this.cardIds = cardIds == null ? new ArrayList<>() : new ArrayList<>(cardIds);
+    public List<Integer> getCardIds() { return cardIds; }
+
+    @Override
+    public String toString() {
+        return super.toString() + " Card IDs: " + cardIds;
     }
 }

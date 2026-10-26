@@ -1,256 +1,310 @@
 package Project.Server;
 
+import Project.Common.*;
+
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.Collection;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 
-import Project.Common.LoggerUtil;
-
+/** Accepts connections and selects the recipients of each message. */
 public enum Server {
-    INSTANCE; // Singleton instance
+    INSTANCE;
 
-    // Static initializer block to configure server-side logging
     static {
         LoggerUtil.LoggerConfig config = new LoggerUtil.LoggerConfig();
-        config.setFileSizeLimit(2048 * 1024); // 2MB
+        config.setFileSizeLimit(2048 * 1024);
         config.setFileCount(1);
         config.setLogLocation("server.log");
         LoggerUtil.INSTANCE.setConfig(config);
     }
 
-    private int port = 3000;
-    private ServerSocket serverSocket = null; // kept as field so shutdown() can close it
-    private GameServer gameServer;
-    private boolean isRunning = true;
-    boolean isolateNonParticipantMessages = true; // can be toggled based on what's logical for the project
-    private final BaseServer baseServer = new BaseServer();
+    private final ConcurrentHashMap<Long, ServerThread> connectedClients = new ConcurrentHashMap<>();
+    private final List<ServerThread> disconnectedBuffer = new ArrayList<>();
+    private final List<ServerThread> failedGameSends = new ArrayList<>();
+    private int gameDepth;
+    private boolean drainingGameFailures;
+    private volatile boolean isRunning = true;
+    private volatile ServerSocket listener;
+    private long nextClientId = 1;
+    // This monitor owns both connection callbacks and game/timer transitions.
+    private final GameServer gameServer = new GameServer(this);
 
-    /**
-     * Gracefully disconnect clients
-     */
-    private void shutdown() {
-        try {
-            isRunning = false; // stop the accept() loop in start()
-            if (serverSocket != null && !serverSocket.isClosed()) {
-                serverSocket.close(); // unblocks the blocking accept() call in start()
-            }
-            baseServer.connectedClients.values().forEach(serverThread -> serverThread.disconnect());
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
+    /** Register resource cleanup for JVM shutdown. */
     private Server() {
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            baseServer.info("JVM is shutting down. Perform cleanup tasks.");
-            shutdown();
-        }));
+        Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown));
     }
 
+    /** Accept connections and give each socket its own handler thread. */
     private void start(int port) {
-        this.port = port;
-        baseServer.info("Listening on port " + this.port);
         try (ServerSocket serverSocket = new ServerSocket(port)) {
-            this.serverSocket = serverSocket; // store reference so shutdown() can close it
+            listener = serverSocket;
+            LoggerUtil.INSTANCE.info("Server listening on " + port);
             while (isRunning) {
-                baseServer.info("Waiting for next client");
-                Socket incomingClient = serverSocket.accept(); // blocks until a client connects
-                baseServer.info("Client connected");
-                ServerThread serverThread = new ServerThread(incomingClient, this::onServerThreadInitialized);
-                serverThread.start();
+                Socket client = serverSocket.accept();
+                new ServerThread(client, this, this::onServerThreadInitialized).start();
             }
         } catch (IOException e) {
-            baseServer.info("Error accepting connection");
-            e.printStackTrace();
+            if (isRunning) {
+                LoggerUtil.INSTANCE.info("Server error: " + e.getMessage());
+            }
         } finally {
-            baseServer.info("Server socket closed");
+            shutdown();
         }
     }
 
-    /**
-     * Callback from ServerThread once streams are open and it is ready to
-     * send/receive.
-     */
-    private synchronized void onServerThreadInitialized(ServerThread serverThread) {
-        baseServer.registerClient(serverThread);
-        notifyGameServerClientJoined(serverThread); // trigger game server join hook
+    /** Stop acceptance and close current connections without holding the registry lock. */
+    private void shutdown() {
+        isRunning = false;
+        try {
+            if (listener != null) {
+                listener.close();
+            }
+        } catch (IOException e) {
+            LoggerUtil.INSTANCE.info("Could not close listener: " + e.getMessage());
+        }
+        // Socket close does not wait for a handler's callback or hold the registry lock.
+        for (ServerThread client : connectedClients.values()) {
+            client.disconnect();
+        }
     }
 
-    // start region for handle*() methods ===================================
-
-    protected synchronized void handleCardAction(ServerThread sender, int cardId, int x, int y) {
-        if (!isGameServerActive()) {
+    /** Register a handler only after its object streams are ready. */
+    private synchronized void onServerThreadInitialized(ServerThread client) {
+        if (!client.isRunning()) {
             return;
         }
-        try {
-            gameServer.handleCardAction(sender, cardId, x, y);
-        } catch (Exception e) {
-            LoggerUtil.INSTANCE.severe("Game server handleCardAction failed", e);
-        }
-    }
-
-    /**
-     * Passes user's intent to join the game session to the game session
-     */
-    protected synchronized void handleReady(ServerThread sender) {
-        if (!isGameServerActive()) {
+        client.setClientId(nextAvailableClientId());
+        if (!client.sendClientId()) {
+            client.disconnect();
             return;
         }
-        try {
-            gameServer.handleReady(sender);
-        } catch (Exception e) {
-            LoggerUtil.INSTANCE.severe("Game server handleReady failed", e);
+        if (!syncExistingUsersTo(client) || !client.isRunning()) {
+            return;
+        }
+        connectedClients.put(client.getClientId(), client);
+        runGameAction(() -> gameServer.syncTo(client));
+        if (connectedClients.get(client.getClientId()) != client || !client.isRunning()) {
+            return;
+        }
+        sendServerJoin(client);
+    }
+
+    /** Send the current user-list snapshot to one connection. */
+    private boolean syncExistingUsersTo(ServerThread recipient) {
+        List<User> users = new ArrayList<>();
+        for (ServerThread existing : connectedClients.values()) {
+            users.add(existing.getUser());
+        }
+        if (!sendServerSync(recipient, users)) {
+            recipient.disconnect();
+            return false;
+        }
+        return true;
+    }
+
+    /** Bundle the existing-user snapshot for one new or requesting client. */
+    private boolean sendServerSync(ServerThread recipient, List<User> users) {
+        UserListPayload payload = new UserListPayload(users);
+        payload.setPayloadType(PayloadType.SERVER_SYNC);
+        return recipient.sendToClient(payload);
+    }
+
+    /** Bundle a join event and announce it to the connected clients. */
+    private void sendServerJoin(ServerThread client) {
+        ConnectionPayload payload = new ConnectionPayload();
+        payload.setPayloadType(PayloadType.SERVER_JOIN);
+        payload.setClientId(client.getClientId());
+        payload.setClientName(client.getClientName());
+        sendBroadcast(payload);
+    }
+
+    /** Choose a positive ID that is not assigned to a connected client. */
+    private long nextAvailableClientId() {
+        while (true) {
+            if (nextClientId <= 0) {
+                nextClientId = 1;
+            }
+            long candidate = nextClientId++;
+            if (!connectedClients.containsKey(candidate)) {
+                return candidate;
+            }
         }
     }
 
-    /**
-     * Called when a client requests to disconnect.
-     */
-    protected synchronized void handleDisconnect(ServerThread sender) {
-        baseServer.disconnect(sender);
-        notifyGameServerClientRemoved(sender);
+    /** Close this connection and queue one leave event on its first removal. */
+    private void removeClient(ServerThread client) {
+        client.disconnect();
+        if (connectedClients.remove(client.getClientId(), client)) {
+            disconnectedBuffer.add(client);
+            runGameAction(() -> gameServer.onClientLeft(client));
+        }
     }
 
-    /** Reverses the text and broadcasts the result. */
-    protected synchronized void handleReverseText(ServerThread sender, String text) {
-        StringBuilder sb = new StringBuilder(text);
-        sb.reverse();
-        broadcast(sender, sb.toString());
+    /** Apply a disconnect requested by this client. */
+    protected synchronized void handleDisconnect(ServerThread client) {
+        onServerThreadDisconnected(client);
     }
 
-    /** Broadcasts a chat message from the sender to all clients. */
+    /** Remove a closed connection and send queued leave notices. */
+    protected synchronized void onServerThreadDisconnected(ServerThread client) {
+        removeClient(client);
+        processDisconnectedBuffer();
+    }
+
+    /** Send a requested user list through the same structured snapshot path. */
+    protected synchronized void handleGetUserList(ServerThread requester) {
+        if (!syncExistingUsersTo(requester)) {
+            removeClient(requester);
+            processDisconnectedBuffer();
+        }
+    }
+
+    /** Format client chat before sending it to the connected clients. */
     protected synchronized void handleMessage(ServerThread sender, String text) {
-        broadcast(sender, text);
+        sendMessage(sender.getDisplayName() + ": " + text);
     }
 
-    // end region for handle*() methods ===================================
+    /** Reverse the requested text before sending its reply. */
+    protected synchronized void handleReverseText(ServerThread sender, String text) {
+        sendMessage(sender.getDisplayName() + ": " + new StringBuilder(text).reverse());
+    }
 
-    // Utils
-
-    /**
-     * Sets the active game server implementation.
-     */
-    public synchronized void setGameServer(GameServer gameServer) {
-        this.gameServer = gameServer;
-        if (this.gameServer == null) {
-            baseServer.info("GameServer disabled");
-        } else {
-            baseServer.info("GameServer set to " + this.gameServer.getClass().getSimpleName());
+    /** Apply a registered client's readiness request under the shared server lock. */
+    protected synchronized void handleReady(ServerThread sender) {
+        if (connectedClients.get(sender.getClientId()) == sender) {
+            runGameAction(() -> gameServer.handleReady(sender));
         }
     }
 
-    /**
-     * Returns the current connected client count.
-     */
-    protected synchronized int getConnectedClientCount() {
-        return baseServer.getConnectedClientCount();
-    }
-
-    /**
-     * Returns a snapshot of currently connected clients.
-     */
-    protected synchronized Collection<ServerThread> getConnectedClientsSnapshot() {
-        return baseServer.getConnectedClientsSnapshot();
-    }
-
-    /**
-     * Checks whether a client is currently connected.
-     */
-    protected synchronized boolean hasClient(ServerThread client) {
-        return baseServer.hasClient(client);
-    }
-
-    /**
-     * Sends a message to all connected clients.
-     */
-    protected synchronized void broadcast(ServerThread sender, String message) {
-
-        if (isolateNonParticipantMessages
-                && sender != null
-                && isGameServerActive()
-                && !gameServer.isActivePlayer(sender)) {
-            // Non-participant chat is multicast to the non-participant group,
-            // including the sender so they receive server confirmation of their message.
-            // Used to prevent non-participants from spoiling a game
-            List<ServerThread> nonParticipants = getConnectedClientsSnapshot().stream()
-                    // commented out so sender gets their own message back too
-                    // .filter(client -> client.getClientId() != sender.getClientId())
-                    .filter(client -> !gameServer.isActivePlayer(client))
-                    .collect(Collectors.toList());
-
-            baseServer.multicastMessage(sender, message, nonParticipants);
-            return;
+    /** Let an active participant clear the example session and begin again. */
+    protected synchronized void handleReset(ServerThread sender) {
+        if (connectedClients.get(sender.getClientId()) == sender) {
+            runGameAction(() -> gameServer.handleReset(sender));
         }
-
-        baseServer.broadcast(sender, message);
     }
 
-    /**
-     * Applies sendAction to each connected client, buffering failures, then
-     * processes the disconnected buffer.
-     */
-    protected synchronized void sendOrDisconnect(Function<ServerThread, Boolean> sendAction) {
-        baseServer.sendOrDisconnect(sendAction);
-    }
-
-    /**
-     * Sends data to a single client. If send fails, client is removed.
-     */
-    protected synchronized void unicast(ServerThread target, Function<ServerThread, Boolean> sendAction) {
-        baseServer.unicast(target, sendAction);
-    }
-
-    /**
-     * Sends data to a subset of clients. Any failed sends are disconnected.
-     */
-    protected synchronized void multicast(Collection<ServerThread> targets,
-            Function<ServerThread, Boolean> sendAction) {
-        baseServer.multicast(targets, sendAction);
-    }
-
-    private boolean isGameServerActive() {
-        return gameServer != null;
-    }
-
-    private void notifyGameServerClientJoined(ServerThread serverThread) {
-        if (!isGameServerActive()) {
-            return;
+    /** Pass a card ID and target coordinate to the current game session. */
+    protected synchronized void handleCardAction(ServerThread sender, int cardId, int x, int y) {
+        if (connectedClients.get(sender.getClientId()) == sender) {
+            runGameAction(() -> gameServer.handleCardAction(sender, cardId, x, y));
         }
-        // onClientRemoved can be called during initialization to trigger
-        // onPlayerJoined/onPlayerLeft hooks
+    }
+
+    /** Timer callbacks enter through the same monitor as client requests. */
+    synchronized void onGameTimer(long generation) {
+        runGameAction(() -> gameServer.onTimer(generation));
+    }
+
+    /** Send one game payload to every connected client. */
+    void sendGameBroadcast(Payload payload) {
+        for (ServerThread recipient : List.copyOf(connectedClients.values())) {
+            if (!recipient.sendToClient(payload)) {
+                failedGameSends.add(recipient);
+            }
+        }
+    }
+
+    /** Send one game payload privately; defer failed-recipient cleanup. */
+    void sendGameTo(ServerThread recipient, Payload payload) {
+        if (!recipient.sendToClient(payload)) {
+            failedGameSends.add(recipient);
+        }
+    }
+
+    /** Finish a game transition before removing failed send recipients. */
+    private void runGameAction(Runnable action) {
+        gameDepth++;
         try {
-            gameServer.onSpectatorJoined(serverThread);
-        } catch (Exception e) {
-            LoggerUtil.INSTANCE.severe("Game server onSpectatorJoined failed", e);
+            action.run();
+        } finally {
+            gameDepth--;
+            if (gameDepth == 0) {
+                drainFailedGameSends();
+            }
         }
     }
 
-    private void notifyGameServerClientRemoved(ServerThread serverThread) {
-        if (!isGameServerActive()) {
+    /** Remove failed recipients once no game-state loop is in progress. */
+    private void drainFailedGameSends() {
+        if (drainingGameFailures) {
             return;
         }
+        drainingGameFailures = true;
         try {
-            gameServer.onClientRemoved(serverThread);
-        } catch (Exception e) {
-            LoggerUtil.INSTANCE.severe("Game server onClientRemoved failed", e);
+            do {
+                while (!failedGameSends.isEmpty()) {
+                    ServerThread failed = failedGameSends.remove(0);
+                    removeClient(failed);
+                }
+                processDisconnectedBuffer();
+            } while (!failedGameSends.isEmpty() || !disconnectedBuffer.isEmpty());
+        } finally {
+            drainingGameFailures = false;
         }
     }
 
+    /** Bundle a MESSAGE payload and broadcast it. */
+    private void sendMessage(String message) {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.MESSAGE);
+        payload.setMessage(message);
+        sendBroadcast(payload);
+    }
+
+    /** Send the supplied payload to every ready handler without changing its data. */
+    private void sendBroadcast(Payload payload) {
+        sendOrDisconnect(recipient -> recipient.sendToClient(payload));
+    }
+
+    /** Try each current recipient and queue failed connections for removal. */
+    private void sendPass(Function<ServerThread, Boolean> sendAction) {
+        for (ServerThread client : List.copyOf(connectedClients.values())) {
+            if (!sendAction.apply(client)) {
+                removeClient(client);
+            }
+        }
+    }
+
+    /** Complete a send pass before processing its disconnect notices. */
+    private void sendOrDisconnect(Function<ServerThread, Boolean> sendAction) {
+        sendPass(sendAction);
+        processDisconnectedBuffer();
+    }
+
+    /** Drain leave notices without recursively broadcasting further failures. */
+    private void processDisconnectedBuffer() {
+        while (!disconnectedBuffer.isEmpty()) {
+            ServerThread departed = disconnectedBuffer.remove(0);
+            LoggerUtil.INSTANCE.info("Removed " + departed.getDisplayName());
+            sendLeaveNotice(departed);
+        }
+    }
+
+    /** Send the typed leave event without starting another cleanup pass. */
+    private void sendLeaveNotice(ServerThread departed) {
+        sendPass(recipient -> recipient.sendClientStatus(
+                departed.getClientId(), departed.getClientName(), PayloadType.SERVER_LEAVE));
+    }
+
+    /** Validate the optional port argument and start the server. */
     public static void main(String[] args) {
-        LoggerUtil.INSTANCE.info("Server Starting");
-        Server server = Server.INSTANCE;
-        server.setGameServer(new GameServer());
         int port = 3000;
         try {
-            port = Integer.parseInt(args[0]);
-        } catch (Exception e) {
-            // use default port
+            if (args.length > 0) {
+                port = Integer.parseInt(args[0]);
+            }
+            if (port < 1 || port > 65535) {
+                LoggerUtil.INSTANCE.info("Port must be between 1 and 65535");
+                return;
+            }
+        } catch (NumberFormatException e) {
+            LoggerUtil.INSTANCE.info("Port must be a whole number");
+            return;
         }
-        server.start(port);
-        LoggerUtil.INSTANCE.info("Server Stopped");
+        Server.INSTANCE.start(port);
     }
 }

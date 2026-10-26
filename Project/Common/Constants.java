@@ -1,7 +1,7 @@
 package Project.Common;
 
 public abstract class Constants {
+    public static final String COMMAND_TRIGGER = "[cmd]";
     public static final long DEFAULT_CLIENT_ID = -1L;
-    /** Sentinel client ID used to tag server-generated game event messages. */
-    public static final long GAME_CLIENT_ID = -2L;
+    public static final int SETUP_TIMEOUT_MS = 3000;
 }
