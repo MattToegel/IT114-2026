@@ -264,7 +264,7 @@ public class Client {
                 processServerJoin((ConnectionPayload) payload);
                 break;
             case SERVER_LEAVE:
-                processServerLeave((ConnectionPayload) payload);
+                processServerLeave(payload);
                 break;
             case MESSAGE:
                 processMessage(payload);
@@ -318,11 +318,11 @@ public class Client {
      * Called by processPayload() for SERVER_LEAVE.
      * Removes the identity from the local map and reports it only if it was present.
      *
-     * @param connection the identity of the user who left
+     * @param payload the ID of the user who left; the name is already stored locally
      */
-    private void processServerLeave(ConnectionPayload connection) {
-        User user = new User(connection.getClientId(), connection.getClientName());
-        if (knownUsers.remove(user.getClientId()) != null) {
+    private void processServerLeave(Payload payload) {
+        User user = knownUsers.remove(payload.getClientId());
+        if (user != null) {
             System.out.println(user.getDisplayName() + " left");
         }
     }

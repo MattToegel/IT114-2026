@@ -23,6 +23,6 @@ Only Client and ServerThread construct, read or transport payloads. Server handl
 
 ## History
 
-Part 1 history is preserved. Two commits on this branch show the package-only copy and the completed Part 2 lesson. The earlier three-stage branch is preserved in `Spring-Module05-Sockets-MCCS-Part2-before-responsibility-fix-20261026`.
+Part 1 history is preserved. The first two Part 2 commits show the package-only copy and the completed lesson; later commits contain lesson corrections. The earlier three-stage branch is preserved in `Spring-Module05-Sockets-MCCS-Part2-before-responsibility-fix-20261026`.
 
 [TextFX.java](https://github.com/MattToegel/IT114-2026/blob/Module05-Sockets-MCCS-Part2/M4/MCCS/Part2/TextFX.java) provides terminal colors. Run its utility demo with `java M4.MCCS.Part2.TextFX`.

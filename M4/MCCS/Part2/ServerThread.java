@@ -283,16 +283,15 @@ public class ServerThread extends Thread {
 
     /**
      * Called by Server on each remaining recipient's handler when a user leaves.
-     * Bundles the departed identity so the client can update its local user map.
+     * Sends the departed ID; clients use their stored User for the leave notice.
      *
      * @param user the user who left
      * @return true if sendToClient() completed the local write
      */
     protected boolean sendLeaveNotice(User user) {
-        ConnectionPayload payload = new ConnectionPayload();
+        Payload payload = new Payload();
         payload.setPayloadType(PayloadType.SERVER_LEAVE);
         payload.setClientId(user.getClientId());
-        payload.setClientName(user.getClientName());
         return sendToClient(payload);
     }
 
