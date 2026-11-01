@@ -93,7 +93,7 @@ public enum Client {
         }
     }
 
-    /** Handle a recognized slash command and leave ordinary chat text to the caller. */
+    /** Handle slash commands, including /users with the server-confirmed public score. */
     private boolean processClientCommand(String text) throws IOException {
         String[] parts = text.trim().split("\\s+", 2);
         Command command = Command.fromText(parts[0]);
@@ -138,7 +138,8 @@ public enum Client {
             case USERS:
                 LoggerUtil.INSTANCE.info("Known clients:");
                 knownUsers.values().forEach(user -> LoggerUtil.INSTANCE.info(
-                        user.getDisplayName() + (user.isReady() ? " [ready]" : " [not ready]")));
+                        user.getDisplayName() + (user.isReady() ? " [ready]" : " [not ready]")
+                                + " points: " + user.getPoints()));
                 return true;
             case REVERSE:
                 sendReverse(arguments);
@@ -297,6 +298,9 @@ public enum Client {
                 break;
             case PLAYER_READY_STATUS:
                 processPlayerReadyStatus((BoolPayload) payload);
+                break;
+            case POINTS:
+                processPoints((IntPayload) payload);
                 break;
             case DISCONNECT:
                 processDisconnect();
@@ -466,6 +470,19 @@ public enum Client {
             user.setReady(payload.getValue());
             LoggerUtil.INSTANCE.info(user.getDisplayName()
                     + (user.isReady() ? " ready" : " not ready"));
+        }
+    }
+
+    /**
+     * Apply a GameServer-owned public score to the local User.
+     * @param payload the participant ID and authoritative total
+     */
+    private void processPoints(IntPayload payload) {
+        User user = knownUsers.get(payload.getClientId());
+        if (user != null) {
+            user.setPoints(payload.getValue());
+            LoggerUtil.INSTANCE.info(user.getDisplayName()
+                    + " points: " + user.getPoints());
         }
     }
 }

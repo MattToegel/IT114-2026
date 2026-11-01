@@ -1,7 +1,7 @@
 package Project.Common;
 
 /**
- * Ordinary identity data for one connected user.
+ * Public identity and session progress for one connected user.
  * ServerThread holds this record; Server uses it for recipients and user lists.
  * Payloads may carry the record between Client and ServerThread.
  */
@@ -9,6 +9,7 @@ public class User implements java.io.Serializable {
     private final long clientId;
     private final String clientName;
     private volatile boolean ready;
+    private volatile int points;
 
     public User(long clientId, String clientName) {
         this.clientId = clientId;
@@ -38,6 +39,22 @@ public class User implements java.io.Serializable {
      */
     public void setReady(boolean ready) {
         this.ready = ready;
+    }
+
+    /**
+     * Report the public total calculated by GameServer.
+     * @return this participant's current session points
+     */
+    public int getPoints() {
+        return points;
+    }
+
+    /**
+     * Set GameServer's total on the server or apply a public score update on a client.
+     * @param points this participant's current session total
+     */
+    public void setPoints(int points) {
+        this.points = points;
     }
 
     @Override

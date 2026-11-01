@@ -17,5 +17,6 @@ public enum PayloadType {
     READY,
     RESET,
     PLAYER_READY_STATUS,
-    GAME_PHASE_SYNC
+    GAME_PHASE_SYNC,
+    POINTS
 }

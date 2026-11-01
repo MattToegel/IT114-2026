@@ -74,17 +74,14 @@ final class GameServer {
             if (players.size() < 2) {
                 resetSession("At least two ready players are needed");
             } else {
-                phase = Phase.IN_PROGRESS;
-                Server.INSTANCE.sendGamePhaseToAll(phase);
-                Server.INSTANCE.sendGameMessage("Example session started");
-                schedule(SESSION_MS);
+                onSessionStart();
             }
         } else if (phase == Phase.IN_PROGRESS) {
             resetSession("Example session finished");
         }
     }
 
-    /** Update game state after Server removes a participant; spectator departure has no game effect.
+    /** Clear a disconnected participant's points; spectator departure has no game effect.
      *
      * @param client the disconnected user
      */
@@ -93,6 +90,7 @@ final class GameServer {
             return;
         }
         client.setReady(false);
+        client.setPoints(0);
         Server.INSTANCE.sendReadyStatusToAll(client.getClientId(), false);
         if (players.isEmpty()) {
             resetSession("Session ended because all players left");
@@ -101,7 +99,7 @@ final class GameServer {
         }
     }
 
-    /** Replay the current public phase and readiness to a newcomer, including a spectator.
+    /** Replay public phase, readiness, and points to a newcomer, including a spectator.
      *
      * @param recipientId the newly registered connection
      */
@@ -109,10 +107,26 @@ final class GameServer {
         Server.INSTANCE.sendGamePhaseTo(recipientId, phase);
         for (long id : players.keySet()) {
             Server.INSTANCE.sendReadyStatusTo(recipientId, id, true);
+            Server.INSTANCE.sendPointsTo(recipientId, id, players.get(id).getPoints());
         }
     }
 
-    /** Invalidate old deadlines, clear participants, and broadcast the reset state.
+    /**
+     * Start the practice session once after at least two players finish readiness.
+     * Award each participant one start bonus; this is replaced by guess scoring next lesson.
+     */
+    private void onSessionStart() {
+        phase = Phase.IN_PROGRESS;
+        Server.INSTANCE.sendGamePhaseToAll(phase);
+        for (User player : players.values()) {
+            player.setPoints(1);
+            Server.INSTANCE.sendPointsToAll(player.getClientId(), player.getPoints());
+        }
+        Server.INSTANCE.sendGameMessage("Practice session started; each ready player earned one start point");
+        schedule(SESSION_MS);
+    }
+
+    /** Invalidate old deadlines, clear readiness and points, and broadcast the reset state.
      *
      * @param message the reason broadcast to all connected users
      */
@@ -120,7 +134,9 @@ final class GameServer {
         generation++;
         for (User user : players.values()) {
             user.setReady(false);
+            user.setPoints(0);
             Server.INSTANCE.sendReadyStatusToAll(user.getClientId(), false);
+            Server.INSTANCE.sendPointsToAll(user.getClientId(), 0);
         }
         players.clear();
         phase = Phase.INACTIVE;

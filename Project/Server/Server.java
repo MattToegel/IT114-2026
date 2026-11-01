@@ -390,4 +390,14 @@ public enum Server {
     void sendGameMessageTo(long recipientId, String message) {
         sendGameTo(recipientId, client -> client.sendMessage(Constants.DEFAULT_CLIENT_ID, message));
     }
+
+    /** Sync one observer with GameServer-owned public points. */
+    void sendPointsTo(long recipientId, long clientId, int points) {
+        sendGameTo(recipientId, client -> client.sendPoints(clientId, points));
+    }
+
+    /** Broadcast GameServer-owned public points after evaluation or reset. */
+    void sendPointsToAll(long clientId, int points) {
+        sendGameBroadcast(client -> client.sendPoints(clientId, points));
+    }
 }
