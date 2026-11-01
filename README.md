@@ -1,9 +1,1 @@
-# Scoring Basics: A Runnable Practice Bonus
-
-Continue the Ready Check checkpoint. This small scoring lesson adds public point totals without introducing guesses or changing the ready window. GameServer awards each ready participant **one start point once** when at least two ready players start the eight-second example session. This temporary rule makes the scoring path visible; Simultaneous Turns replaces it with one point per exact matching guess at round evaluation.
-
-Use JDK 26 or later from this checkpoint's root: `./build.sh Project`, then `./run.sh Project server 3000` and `./run.sh Project client` in two other terminals. Each client enters `/name <name>`, `/connect localhost:3000`, and `/ready`. After the ready window closes, run `/users`: both participants show one point. A named spectator joining during play sees the same public totals but remains ineligible to score or reset. When the session ends or a participant resets, public totals return to zero. Repeating the session awards one new start point, never two in one session.
-
-`GameServer` alone sets points on `User`. `Server` selects recipients using ordinary IDs and values. `ServerThread` bundles `POINTS` as an `IntPayload`, and `Client` processes the update before displaying it in `/users`. The inherited `Constants.LOG_PAYLOADS` guard still controls endpoint payload diagnostics.
-
-Changed from Ready Check: added `Project/Common/IntPayload.java`; added public points to `User`, the `POINTS` payload type, the client score display/handler, Server score routing, ServerThread score packaging, and GameServer's one-time start bonus, sync, and reset updates. The existing ready, chat, reverse, presence, timer, and failed-send paths remain.
+# IT114-2026
