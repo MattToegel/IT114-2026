@@ -1,6 +1,10 @@
 package Project.Common;
 
-/** One connected user's ID and display name. */
+/**
+ * Ordinary identity data for one connected user.
+ * ServerThread holds this record; Server uses it for recipients and user lists.
+ * Payloads may carry the record between Client and ServerThread.
+ */
 public class User implements java.io.Serializable {
     private final long clientId;
     private final String clientName;

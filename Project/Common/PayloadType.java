@@ -1,6 +1,9 @@
 package Project.Common;
 
-/** The action carried by a Payload. */
+/**
+ * Identifies the request, response, or event carried by a Payload.
+ * Client and ServerThread processPayload() methods use it to choose a handler.
+ */
 public enum PayloadType {
     MESSAGE,
     REVERSE,

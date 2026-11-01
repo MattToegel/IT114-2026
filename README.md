@@ -12,3 +12,5 @@ Reference checkpoint for Fall 2026 IT114 Milestone 2 prep on `Milestone2-Prep`. 
 Continue the completed Part 2 presence program in `Project`: ten copied Java classes plus `Project/Common/LoggerUtil.java`. Keep `UserListPayload`, the `ServerThread` `User` reference, typed `/users`, join/leave updates, and the existing send/process methods. `Client` and `Server` use enum `INSTANCE` entry points; no room API or extra base thread is added. Follow the presentation's copy, package, Singleton, script, and logging steps before comparing this complete checkpoint.
 
 Default port:3000. The server accepts an optional port argument; the client uses /connect localhost:3000 for a server on the same computer.
+
+Client and ServerThread alone interpret or construct payloads. Server routes ordinary IDs, User records and messages. Leave events contain only the departing ID; the client removes and displays its existing User record.
