@@ -12,6 +12,7 @@ import java.util.function.Function;
 
 /** Accepts connections and selects the recipients of each message. */
 public enum Server {
+
     INSTANCE;
 
     static {
@@ -23,15 +24,14 @@ public enum Server {
     }
 
     private final ConcurrentHashMap<Long, ServerThread> connectedClients = new ConcurrentHashMap<>();
+
     private final List<ServerThread> disconnectedBuffer = new ArrayList<>();
-    private final List<ServerThread> failedGameSends = new ArrayList<>();
-    private int gameDepth;
-    private boolean drainingGameFailures;
+
     private volatile boolean isRunning = true;
+
     private volatile ServerSocket listener;
+
     private long nextClientId = 1;
-    // This monitor owns both connection callbacks and game/timer transitions.
-    private final GameServer gameServer = new GameServer(this);
 
     /** Register resource cleanup for JVM shutdown. */
     private Server() {
@@ -45,7 +45,7 @@ public enum Server {
             LoggerUtil.INSTANCE.info("Server listening on " + port);
             while (isRunning) {
                 Socket client = serverSocket.accept();
-                new ServerThread(client, this, this::onServerThreadInitialized).start();
+                new ServerThread(client, this::onServerThreadInitialized).start();
             }
         } catch (IOException e) {
             if (isRunning) {
@@ -86,43 +86,48 @@ public enum Server {
             return;
         }
         connectedClients.put(client.getClientId(), client);
-        runGameAction(() -> gameServer.syncTo(client));
+        runGameAction(() -> gameServer.syncTo(client.getClientId()));
         if (connectedClients.get(client.getClientId()) != client || !client.isRunning()) {
             return;
         }
         sendServerJoin(client);
     }
 
-    /** Send the current user-list snapshot to one connection. */
+    /**
+     * Collects the current User records for initialization or a /users request.
+     * The recipient's ServerThread bundles the snapshot; a failed send closes it.
+     *
+     * @param recipient the connection that needs the snapshot
+     * @return true if the local write completed, not a delivery acknowledgment
+     */
     private boolean syncExistingUsersTo(ServerThread recipient) {
         List<User> users = new ArrayList<>();
         for (ServerThread existing : connectedClients.values()) {
             users.add(existing.getUser());
         }
-        if (!sendServerSync(recipient, users)) {
+        if (!recipient.sendServerSync(users)) {
             recipient.disconnect();
             return false;
         }
         return true;
     }
 
-    /** Bundle the existing-user snapshot for one new or requesting client. */
-    private boolean sendServerSync(ServerThread recipient, List<User> users) {
-        UserListPayload payload = new UserListPayload(users);
-        payload.setPayloadType(PayloadType.SERVER_SYNC);
-        return recipient.sendToClient(payload);
-    }
-
-    /** Bundle a join event and announce it to the connected clients. */
+    /**
+     * Called by onServerThreadInitialized() after the newcomer is registered.
+     * Asks each recipient's ServerThread to bundle the new User as a join event.
+     *
+     * @param client the newly registered connection
+     */
     private void sendServerJoin(ServerThread client) {
-        ConnectionPayload payload = new ConnectionPayload();
-        payload.setPayloadType(PayloadType.SERVER_JOIN);
-        payload.setClientId(client.getClientId());
-        payload.setClientName(client.getClientName());
-        sendBroadcast(payload);
+        sendOrDisconnect(recipient -> recipient.sendServerJoin(client.getUser()));
     }
 
-    /** Choose a positive ID that is not assigned to a connected client. */
+    /**
+     * Called while registering a connection to choose an unused positive ID.
+     * Restarts at 1 after overflow so reserved nonpositive IDs are never assigned.
+     *
+     * @return a positive ID not currently used by a connected client
+     */
     private long nextAvailableClientId() {
         while (true) {
             if (nextClientId <= 0) {
@@ -140,22 +145,37 @@ public enum Server {
         client.disconnect();
         if (connectedClients.remove(client.getClientId(), client)) {
             disconnectedBuffer.add(client);
-            runGameAction(() -> gameServer.onClientLeft(client));
+            runGameAction(() -> gameServer.onClientLeft(client.getUser()));
         }
     }
 
-    /** Apply a disconnect requested by this client. */
+    /**
+     * Handles an explicit client disconnect request from
+     * {@code ServerThread.processDisconnect()}. Uses the same cleanup as a lost connection.
+     *
+     * @param client the connection that requested disconnection
+     */
     protected synchronized void handleDisconnect(ServerThread client) {
         onServerThreadDisconnected(client);
     }
 
-    /** Remove a closed connection and send queued leave notices. */
+    /**
+     * Cleans up after ServerThread reports a closed connection or handleDisconnect()
+     * handles a client request. Repeated calls do not produce duplicate leave notices.
+     *
+     * @param client the connection to remove
+     */
     protected synchronized void onServerThreadDisconnected(ServerThread client) {
         removeClient(client);
         processDisconnectedBuffer();
     }
 
-    /** Send a requested user list through the same structured snapshot path. */
+    /**
+     * Handles a /users request from ServerThread.processGetUserList().
+     * Reuses the initial-sync path to send a current snapshot only to the requester.
+     *
+     * @param requester the connection asking for the current user list
+     */
     protected synchronized void handleGetUserList(ServerThread requester) {
         if (!syncExistingUsersTo(requester)) {
             removeClient(requester);
@@ -163,101 +183,41 @@ public enum Server {
         }
     }
 
-    /** Format client chat before sending it to the connected clients. */
+    /**
+     * Handles a client's intent to send chat, passed here by
+     * {@code ServerThread.processMessage()} after it reads the payload.
+     * Formats ordinary text and asks each recipient's ServerThread to send it.
+     *
+     * @param sender the connection that requested the action
+     * @param text the chat text supplied by that client
+     */
     protected synchronized void handleMessage(ServerThread sender, String text) {
-        sendMessage(sender.getDisplayName() + ": " + text);
+        String message = sender.getDisplayName() + ": " + text;
+        sendBroadcast(sender.getClientId(), message);
     }
 
-    /** Reverse the requested text before sending its reply. */
+    /**
+     * Handles a client's reverse request, passed here by
+     * {@code ServerThread.processReverse()} as ordinary text.
+     * Broadcasts the reversed result using the requesting client's identity.
+     *
+     * @param sender the connection that requested the reversal
+     * @param text the text to reverse
+     */
     protected synchronized void handleReverseText(ServerThread sender, String text) {
-        sendMessage(sender.getDisplayName() + ": " + new StringBuilder(text).reverse());
+        String message = sender.getDisplayName() + ": " + new StringBuilder(text).reverse();
+        sendOrDisconnect(recipient -> recipient.sendReverse(sender.getClientId(), message));
     }
 
-    /** Apply a registered client's readiness request under the shared server lock. */
-    protected synchronized void handleReady(ServerThread sender) {
-        if (connectedClients.get(sender.getClientId()) == sender) {
-            runGameAction(() -> gameServer.handleReady(sender));
-        }
-    }
-
-    /** Let an active participant clear the example session and begin again. */
-    protected synchronized void handleReset(ServerThread sender) {
-        if (connectedClients.get(sender.getClientId()) == sender) {
-            runGameAction(() -> gameServer.handleReset(sender));
-        }
-    }
-
-    /** Pass one typed guess to the current game session. */
-    protected synchronized void handleGuess(ServerThread sender, int guess) {
-        if (connectedClients.get(sender.getClientId()) == sender) {
-            runGameAction(() -> gameServer.handleGuess(sender, guess));
-        }
-    }
-
-    /** Timer callbacks enter through the same monitor as client requests. */
-    synchronized void onGameTimer(long generation) {
-        runGameAction(() -> gameServer.onTimer(generation));
-    }
-
-    /** Send one game payload to every connected client. */
-    void sendGameBroadcast(Payload payload) {
-        for (ServerThread recipient : List.copyOf(connectedClients.values())) {
-            if (!recipient.sendToClient(payload)) {
-                failedGameSends.add(recipient);
-            }
-        }
-    }
-
-    /** Send one game payload privately; defer failed-recipient cleanup. */
-    void sendGameTo(ServerThread recipient, Payload payload) {
-        if (!recipient.sendToClient(payload)) {
-            failedGameSends.add(recipient);
-        }
-    }
-
-    /** Finish a game transition before removing failed send recipients. */
-    private void runGameAction(Runnable action) {
-        gameDepth++;
-        try {
-            action.run();
-        } finally {
-            gameDepth--;
-            if (gameDepth == 0) {
-                drainFailedGameSends();
-            }
-        }
-    }
-
-    /** Remove failed recipients once no game-state loop is in progress. */
-    private void drainFailedGameSends() {
-        if (drainingGameFailures) {
-            return;
-        }
-        drainingGameFailures = true;
-        try {
-            do {
-                while (!failedGameSends.isEmpty()) {
-                    ServerThread failed = failedGameSends.remove(0);
-                    removeClient(failed);
-                }
-                processDisconnectedBuffer();
-            } while (!failedGameSends.isEmpty() || !disconnectedBuffer.isEmpty());
-        } finally {
-            drainingGameFailures = false;
-        }
-    }
-
-    /** Bundle a MESSAGE payload and broadcast it. */
-    private void sendMessage(String message) {
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.MESSAGE);
-        payload.setMessage(message);
-        sendBroadcast(payload);
-    }
-
-    /** Send the supplied payload to every ready handler without changing its data. */
-    private void sendBroadcast(Payload payload) {
-        sendOrDisconnect(recipient -> recipient.sendToClient(payload));
+    /**
+     * Routes chat or a server notice to all connected clients.
+     * ServerThread.sendMessage() creates the payload for each recipient.
+     *
+     * @param clientId the sender's ID, or DEFAULT_CLIENT_ID for a server notice
+     * @param message the display text to send
+     */
+    private void sendBroadcast(long clientId, String message) {
+        sendOrDisconnect(recipient -> recipient.sendMessage(clientId, message));
     }
 
     /** Try each current recipient and queue failed connections for removal. */
@@ -275,7 +235,11 @@ public enum Server {
         processDisconnectedBuffer();
     }
 
-    /** Drain leave notices without recursively broadcasting further failures. */
+    /**
+     * Finishes cleanup after a send pass or a connection-close callback.
+     * Drains queued departures, including any further failures found while sending
+     * leave notices, instead of starting a recursive cleanup call.
+     */
     private void processDisconnectedBuffer() {
         while (!disconnectedBuffer.isEmpty()) {
             ServerThread departed = disconnectedBuffer.remove(0);
@@ -284,10 +248,15 @@ public enum Server {
         }
     }
 
-    /** Send the typed leave event without starting another cleanup pass. */
+    /**
+     * Called by processDisconnectedBuffer() for each removed connection.
+     * Asks the remaining ServerThreads to send the departure; sendPass() queues
+     * any further failures for the existing cleanup loop.
+     *
+     * @param departed the removed connection whose User identifies the departure
+     */
     private void sendLeaveNotice(ServerThread departed) {
-        sendPass(recipient -> recipient.sendClientStatus(
-                departed.getClientId(), departed.getClientName(), PayloadType.SERVER_LEAVE));
+        sendPass(recipient -> recipient.sendLeaveNotice(departed.getUser()));
     }
 
     /** Validate the optional port argument and start the server. */
@@ -306,5 +275,162 @@ public enum Server {
             return;
         }
         Server.INSTANCE.start(port);
+    }
+
+    private final List<ServerThread> failedGameSends = new ArrayList<>();
+
+    private int gameDepth;
+
+    private boolean drainingGameFailures;
+
+    // This monitor owns both connection callbacks and game/timer transitions.
+    private final GameServer gameServer = new GameServer();
+
+    /** Handle ServerThread's READY request for a registered client under the shared lock; GameServer owns readiness. */
+    protected synchronized void handleReady(ServerThread sender) {
+        if (connectedClients.get(sender.getClientId()) == sender) {
+            runGameAction(() -> gameServer.handleReady(sender.getUser()));
+        }
+    }
+
+    /** Handle ServerThread's RESET request for a registered client; GameServer decides eligibility. */
+    protected synchronized void handleReset(ServerThread sender) {
+        if (connectedClients.get(sender.getClientId()) == sender) {
+            runGameAction(() -> gameServer.handleReset(sender.getUser()));
+        }
+    }
+
+    /** Enter a game deadline through the same monitor as client actions; GameServer rejects stale generations. */
+    synchronized void onGameTimer(long generation) {
+        runGameAction(() -> gameServer.onTimer(generation));
+    }
+
+    /**
+     * Runs the selected ServerThread send method for each connected client.
+     * Server chooses the send action from ordinary game data, never a payload.
+     * Failed recipients are removed after the current game transition finishes.
+     * @param sendAction the per-connection send, returning local write success
+     */
+    private void sendGameBroadcast(Function<ServerThread, Boolean> sendAction) {
+        for (ServerThread recipient : List.copyOf(connectedClients.values())) {
+            sendGameTo(recipient.getClientId(), sendAction);
+        }
+    }
+
+    /**
+     * Runs one ServerThread send and queues a failed recipient for cleanup.
+     * @param recipientId the ID of the connection receiving the game update
+     * @param sendAction the send method that bundles the ordinary game data
+     */
+    private void sendGameTo(long recipientId, Function<ServerThread, Boolean> sendAction) {
+        ServerThread recipient = connectedClients.get(recipientId);
+        if (recipient != null && !sendAction.apply(recipient)) {
+            failedGameSends.add(recipient);
+        }
+    }
+
+    /** Finish the GameServer transition before removing failed recipients, including nested send failures. */
+    private void runGameAction(Runnable action) {
+        gameDepth++;
+        try {
+            action.run();
+        } finally {
+            gameDepth--;
+            if (gameDepth == 0) {
+                drainFailedGameSends();
+            }
+        }
+    }
+
+    /** Remove failed recipients after game iteration and broadcast departures without recursive cleanup. */
+    private void drainFailedGameSends() {
+        if (drainingGameFailures) {
+            return;
+        }
+        drainingGameFailures = true;
+        try {
+            do {
+                while (!failedGameSends.isEmpty()) {
+                    ServerThread failed = failedGameSends.remove(0);
+                    removeClient(failed);
+                }
+                processDisconnectedBuffer();
+            } while (!failedGameSends.isEmpty() || !disconnectedBuffer.isEmpty());
+        } finally {
+            drainingGameFailures = false;
+        }
+    }
+
+    /** Send a phase snapshot to one connected user. */
+    void sendGamePhaseTo(long recipientId, Phase phase) {
+        sendGameTo(recipientId, client -> client.sendGamePhase(phase));
+    }
+
+    /** Announce the phase to all connected users. */
+    void sendGamePhaseToAll(Phase phase) {
+        sendGameBroadcast(client -> client.sendGamePhase(phase));
+    }
+
+    /** Synchronize one participant's readiness to one connected user. */
+    void sendReadyStatusTo(long recipientId, long clientId, boolean ready) {
+        sendGameTo(recipientId, client -> client.sendReadyStatus(clientId, ready));
+    }
+
+    /** Announce a participant's readiness to all connected users. */
+    void sendReadyStatusToAll(long clientId, boolean ready) {
+        sendGameBroadcast(client -> client.sendReadyStatus(clientId, ready));
+    }
+
+    /** Send a server-authored explanation to all connected users. */
+    void sendGameMessage(String message) {
+        sendGameBroadcast(client -> client.sendMessage(Constants.DEFAULT_CLIENT_ID, message));
+    }
+
+    /** Explain a rejected game request only to its sender. */
+    void sendGameMessageTo(long recipientId, String message) {
+        sendGameTo(recipientId, client -> client.sendMessage(Constants.DEFAULT_CLIENT_ID, message));
+    }
+
+    /** Handle ServerThread's typed GUESS request for a registered client; GameServer validates the action. */
+    protected synchronized void handleGuess(ServerThread sender, int guess) {
+        if (connectedClients.get(sender.getClientId()) == sender) {
+            runGameAction(() -> gameServer.handleGuess(sender.getUser(), guess));
+        }
+    }
+
+
+    /** Broadcast a participant's public action status without disclosing the private guess. */
+    void sendGuessStatusToAll(long clientId, boolean guessed) {
+        sendGameBroadcast(client -> client.sendGuessStatus(clientId, guessed));
+    }
+
+    /** Sync one observer with a participant's public action status, not its private guess. */
+    void sendGuessStatusTo(long recipientId, long clientId, boolean guessed) {
+        sendGameTo(recipientId, client -> client.sendGuessStatus(clientId, guessed));
+    }
+
+    /** Select only the submitting client for a private guess confirmation; ServerThread packages the value. */
+    void sendGuessConfirmationTo(long recipientId, int guess) {
+        sendGameTo(recipientId, client -> client.sendGuessConfirmation(guess));
+    }
+
+    /** Broadcast GameServer-owned public points after evaluation or reset. */
+    void sendPointsToAll(long clientId, int points) {
+        sendGameBroadcast(client -> client.sendPoints(clientId, points));
+    }
+
+    /** Sync one observer with GameServer-owned public points. */
+    void sendPointsTo(long recipientId, long clientId, int points) {
+        sendGameTo(recipientId, client -> client.sendPoints(clientId, points));
+    }
+
+    /** Announce the next round. */
+    void sendRoundToAll(int round) {
+        sendGameBroadcast(client -> client.sendRound(round));
+    }
+
+    /** Give one observer the current round. */
+    void sendRoundTo(long recipientId, int round) {
+        sendGameTo(recipientId, client -> client.sendRound(round));
     }
 }
