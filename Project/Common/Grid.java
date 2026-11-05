@@ -10,6 +10,11 @@ public class Grid {
     private final int height;
     private final Cell[][] cells;
 
+    /** Create the same seeded rectangular board on server and clients.
+     * @param width board width
+     * @param height board height
+     * @param seed seed for repeatable starting values
+     */
     public Grid(int width, int height, long seed) {
         if (width < 1 || height < 1) {
             throw new IllegalArgumentException("Grid dimensions must be positive");
@@ -25,22 +30,43 @@ public class Grid {
         }
     }
 
+    /** Read the board width for a state sync.
+     * @return the number of columns
+     */
     public int getWidth() {
         return width;
     }
 
+    /** Read the board height for a state sync.
+     * @return the number of rows
+     */
     public int getHeight() {
         return height;
     }
 
+    /** Check whether a target coordinate is inside the board.
+     * @param x target column
+     * @param y target row
+     * @return true when both coordinates are in bounds
+     */
     public boolean contains(int x, int y) {
         return x >= 0 && x < width && y >= 0 && y < height;
     }
 
+    /** Read this authoritative or displayed value.
+     * @param x target column
+     * @param y target row
+     * @return the digit at the requested coordinate
+     */
     public int getValue(int x, int y) {
         return cells[y][x].getValue();
     }
 
+    /** Store a server-confirmed value.
+     * @param x target column
+     * @param y target row
+     * @param value server-confirmed digit to store modulo 10
+     */
     public void setValue(int x, int y, int value) {
         cells[y][x].setValue(value);
     }
@@ -74,6 +100,9 @@ public class Grid {
         return count;
     }
 
+    /** Format this value for terminal display or payload logging.
+     * @return one row of digits per line
+     */
     @Override
     public String toString() {
         StringBuilder result = new StringBuilder();

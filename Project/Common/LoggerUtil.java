@@ -27,6 +27,7 @@ public enum LoggerUtil {
     private LoggerConfig config;
     private volatile boolean isConfigured = false;
 
+    /** Create the enum instance; setConfig() supplies handlers before the first log. */
     LoggerUtil() {
     }
 
@@ -81,15 +82,9 @@ public enum LoggerUtil {
                 "36", "cyan",
                 "37", "white");
 
-        // Matches a TextFX-wrapped segment: ESC[Xm or ESC[0;Xm ... ESC[0m
-        // Group 1 = color number, Group 2 = the wrapped text
-        // Pattern.DOTALL lets group 2 span across newlines
-        private static final Pattern ANSI_COLOR_PATTERN = Pattern.compile("\033\\[(?:0;)?(\\d+)m(.*?)\033\\[0m",
-                Pattern.DOTALL);
-
-        // Fallback: strips any remaining ESC sequences that ANSI_COLOR_PATTERN didn't
-        // convert
-        private static final Pattern ANSI_STRIP_PATTERN = Pattern.compile("\033\\[[0-9;]*m");
+        // Read each style change so adjacent/nested TextFX calls produce balanced tags.
+        // Unsupported styles are removed; terminal output keeps its original ANSI codes.
+        private static final Pattern ANSI_STYLE_PATTERN = Pattern.compile("\033\\[([0-9;]*)m");
 
         @Override
         public String format(LogRecord record) {
@@ -101,17 +96,17 @@ public enum LoggerUtil {
             String message = formatMessage(record);
             if (message == null)
                 message = "null";
-            // For file output, convert any TextFX ANSI codes to [color]...[/color] tags
-            // so the log file is readable in any text editor without escape characters.
-            if (!useColors) {
-                message = convertAnsiToTags(message);
-            }
             String level = getColoredLevel(record.getLevel());
             String throwable = "";
             if (record.getThrown() != null) {
                 // Use stackTraceLimit from LoggerConfig to truncate stack trace
                 throwable = "\n"
                         + getFormattedStackTrace(record.getThrown(), LoggerUtil.INSTANCE.config.getStackTraceLimit());
+            }
+            // File readers do not interpret ANSI, including codes in exception messages.
+            if (!useColors) {
+                message = convertAnsiToTags(message);
+                throwable = convertAnsiToTags(throwable);
             }
             return String.format("%s [%s] (%s):\n> %s%s\n", date, source, level, message, throwable);
         }
@@ -148,19 +143,31 @@ public enum LoggerUtil {
          * @return the message with escape codes replaced by readable tags
          */
         private static String convertAnsiToTags(String text) {
-            Matcher matcher = ANSI_COLOR_PATTERN.matcher(text);
+            Matcher matcher = ANSI_STYLE_PATTERN.matcher(text);
             StringBuilder result = new StringBuilder();
+            String activeColor = null;
+            int offset = 0;
             while (matcher.find()) {
-                String colorCode = matcher.group(1); // e.g. "31"
-                String content = matcher.group(2); // the wrapped text
-                // Look up the color name; fall back to "color-31" style if unknown
-                String name = ANSI_COLOR_NAMES.getOrDefault(colorCode, "color-" + colorCode);
-                matcher.appendReplacement(result,
-                        Matcher.quoteReplacement("[" + name + "]" + content + "[/" + name + "]"));
+                result.append(text, offset, matcher.start());
+                for (String code : matcher.group(1).split(";", -1)) {
+                    String color = ANSI_COLOR_NAMES.get(code);
+                    if (code.isEmpty() || code.equals("0") || code.equals("39") || color != null) {
+                        if (activeColor != null) {
+                            result.append("[/").append(activeColor).append("]");
+                        }
+                        activeColor = color;
+                        if (color != null) {
+                            result.append("[").append(color).append("]");
+                        }
+                    }
+                }
+                offset = matcher.end();
             }
-            matcher.appendTail(result);
-            // Strip any leftover ANSI codes that weren't part of a matched color+reset pair
-            return ANSI_STRIP_PATTERN.matcher(result).replaceAll("");
+            result.append(text, offset, text.length());
+            if (activeColor != null) {
+                result.append("[/").append(activeColor).append("]");
+            }
+            return result.toString();
         }
 
         /**
@@ -679,6 +686,10 @@ public enum LoggerUtil {
         }
     }
 
+    /**
+     * Deliberately overflow the demo stack to exercise limited exception logging.
+     * @param depth the demo call count, incremented without a stopping condition
+     */
     private static void recursiveMethod(int depth) {
         // Keep calling itself to cause a StackOverflowError
         recursiveMethod(depth + 1);

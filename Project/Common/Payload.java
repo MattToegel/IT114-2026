@@ -2,7 +2,11 @@ package Project.Common;
 
 import java.io.Serializable;
 
-/** One typed message shared by the client and server. */
+/**
+ * Serializable base for messages exchanged by Client and ServerThread.
+ * Send methods fill its fields; processPayload() routes it by PayloadType.
+ * Application logic in Server receives ordinary values instead of this object.
+ */
 public class Payload implements Serializable {
     private PayloadType payloadType;
     private long clientId;

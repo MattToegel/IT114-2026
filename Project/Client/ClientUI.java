@@ -104,6 +104,8 @@ public final class ClientUI extends JPanel implements ClientListener {
         actions.shutdown();
     }
 
+    /** Build the Swing controls for choosing a server.
+     */
     private void buildConnectionScreen() {
         JPanel connection = new JPanel(new GridBagLayout());
         JPanel form = new JPanel(new GridLayout(4, 2, 10, 12));
@@ -121,6 +123,8 @@ public final class ClientUI extends JPanel implements ClientListener {
         connectButton.addActionListener(event -> connectFromFields());
     }
 
+    /** Build the Swing board, score, hand, and command controls.
+     */
     private void buildGameScreen() {
         JPanel game = new JPanel(new BorderLayout(8, 8));
         game.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
@@ -186,6 +190,8 @@ public final class ClientUI extends JPanel implements ClientListener {
         chatField.addActionListener(event -> sendChatFromField());
     }
 
+    /** Start connection work from the displayed name and endpoint.
+     */
     private void connectFromFields() {
         String name = nameField.getText().trim();
         String host = hostField.getText().trim();
@@ -213,6 +219,9 @@ public final class ClientUI extends JPanel implements ClientListener {
         });
     }
 
+    /** Display a failed connection attempt to the Swing user.
+     * @param message display text
+     */
     private void showConnectionError(String message) {
         SwingUtilities.invokeLater(() -> {
             if (closed) {
@@ -223,6 +232,8 @@ public final class ClientUI extends JPanel implements ClientListener {
         });
     }
 
+    /** Submit the current Swing chat entry.
+     */
     private void sendChatFromField() {
         String text = chatField.getText();
         if (text.isBlank()) {
@@ -234,6 +245,9 @@ public final class ClientUI extends JPanel implements ClientListener {
 
     private interface Sending { void run() throws IOException; }
 
+    /** Queue one ordered socket action from a Swing control.
+     * @param command socket action to queue
+     */
     private void send(Sending command) {
         try {
             command.run();
@@ -250,6 +264,9 @@ public final class ClientUI extends JPanel implements ClientListener {
         }
     }
 
+    /** Receive an immutable game snapshot from Client.
+     * @param snapshot current immutable view state
+     */
     @Override
     public void onState(ClientSnapshot snapshot) {
         SwingUtilities.invokeLater(() -> {
@@ -259,6 +276,9 @@ public final class ClientUI extends JPanel implements ClientListener {
         });
     }
 
+    /** Receive chat or a game notice from Client.
+     * @param message display text
+     */
     @Override
     public void onMessage(String message) {
         SwingUtilities.invokeLater(() -> {
@@ -336,6 +356,9 @@ public final class ClientUI extends JPanel implements ClientListener {
         renderGrid(snapshot);
     }
 
+    /** Refresh displayed cells from a synchronized game snapshot.
+     * @param snapshot current immutable view state
+     */
     private void renderGrid(ClientSnapshot snapshot) {
         int height = snapshot.grid().size();
         int width = height == 0 ? 0 : snapshot.grid().get(0).size();
@@ -364,6 +387,10 @@ public final class ClientUI extends JPanel implements ClientListener {
         }
     }
 
+    /** Send a selected card and clicked board coordinate.
+     * @param x target column
+     * @param y target row
+     */
     private void playAt(int x, int y) {
         CardChoice selected = (CardChoice) handBox.getSelectedItem();
         if (shown == null || !shown.canPlay() || selected == null) {
@@ -372,6 +399,8 @@ public final class ClientUI extends JPanel implements ClientListener {
         enqueue(() -> send(() -> client.playCard(selected.id(), x, y)));
     }
 
+    /** Refresh only the local approximate countdown label.
+     */
     private void updateTimerLabel() {
         if (shown == null || shown.remainingMillis() <= 0) {
             timerLabel.setText("Time: --");
