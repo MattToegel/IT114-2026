@@ -3,7 +3,11 @@ package Project.Common;
 import java.util.ArrayList;
 import java.util.List;
 
-/** A structured list of users sent by the server. */
+/**
+ * Carries User records for a requested list or an initial presence snapshot.
+ * ServerThread bundles it from the ordinary List supplied by Server;
+ * Client reads the records in its matching process method.
+ */
 public class UserListPayload extends Payload {
     private final List<User> users;
 

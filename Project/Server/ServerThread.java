@@ -6,24 +6,35 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.Socket;
+import java.util.List;
 import java.util.Objects;
 
 
 /** Owns one socket, its object streams, read loop, and resource cleanup. */
 public class ServerThread extends Thread {
+
     private final Socket client;
+
     private volatile User user = new User(Constants.DEFAULT_CLIENT_ID, null);
+
     private final java.util.Timer nameTimer = new java.util.Timer(true);
-    private final Server server;
+
+
     private final java.util.function.Consumer<ServerThread> onInitializationComplete;
+
     private volatile ObjectOutputStream out;
+
     private volatile boolean isRunning;
 
-    /** Keep the accepted socket and the server callback for this one client. */
-    protected ServerThread(Socket client, Server server,
+    /**
+     * Called by Server when accepting a connection; retain its socket and setup callback.
+     * @param client the accepted client socket
+     * @param onInitializationComplete callback after streams open and a valid name is received
+     *        Server assigns the ID and registers the connection when invoked
+     */
+    protected ServerThread(Socket client,
             java.util.function.Consumer<ServerThread> onInitializationComplete) {
         this.client = Objects.requireNonNull(client, "Client socket is required");
-        this.server = Objects.requireNonNull(server, "Server is required");
         this.onInitializationComplete = Objects.requireNonNull(onInitializationComplete, "Callback is required");
     }
 
@@ -32,37 +43,68 @@ public class ServerThread extends Thread {
         return isRunning;
     }
 
-    /** Return the identity held by this connection. */
+    /**
+     * Supplies Server with the ID used to identify this connection in its registry.
+     *
+     * @return the ID stored in this handler's User record
+     */
     public long getClientId() {
         return user.getClientId();
     }
 
-    /** Use the user's display label in connection messages. */
+    /**
+     * Supplies a display label for Server messages and connection diagnostics.
+     *
+     * @return the display name from this handler's User record
+     */
     public String getDisplayName() {
         return user.getDisplayName();
     }
 
-    /** Return this connection's current user snapshot. */
+    /**
+     * Supplies Server with ordinary user data for lists and connection events.
+     * This handler has a User record; Server does not need a payload to inspect it.
+     *
+     * @return this handler's current User record
+     */
     protected User getUser() {
         return user;
     }
 
-    /** Assign the ID while retaining the accepted name. */
+    /**
+     * Called by Server during registration after it chooses a positive ID.
+     * Replaces this handler's User record while keeping the accepted name.
+     *
+     * @param value the server-assigned positive client ID
+     */
     protected void setClientId(long value) {
         user = new User(value, user.getClientName());
     }
 
-    /** Return the name stored with this connection's identity. */
+    /**
+     * Provides this connection's accepted name when confirming its identity.
+     *
+     * @return the name stored in this handler's User record
+     */
     protected String getClientName() {
         return user.getClientName();
     }
 
-    /** Report whether the server has assigned a positive client ID. */
+    /**
+     * Used by process methods to check whether this connection is registered.
+     *
+     * @return true after Server assigns a positive client ID
+     */
     private boolean isRegistered() {
         return getClientId() > 0;
     }
 
-    /** Confirm this connection's assigned identity. */
+    /**
+     * Called by Server during registration to confirm this client's ID and name.
+     * Bundles a CLIENT_ID response for this connection only.
+     *
+     * @return true if sendToClient() completed the local write
+     */
     protected boolean sendClientId() {
         ConnectionPayload payload = new ConnectionPayload();
         payload.setPayloadType(PayloadType.CLIENT_ID);
@@ -71,12 +113,31 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-    /** Send one presence payload through this connection. */
-    protected boolean sendClientStatus(long id, String name, PayloadType type) {
+    /**
+     * Called by Server.syncExistingUsersTo() on the connection needing a snapshot.
+     * Bundles User records as SERVER_SYNC for the client's local user map.
+     *
+     * @param users the current user records collected by Server
+     * @return true if sendToClient() completed the local write
+     */
+    protected boolean sendServerSync(List<User> users) {
+        UserListPayload payload = new UserListPayload(users);
+        payload.setPayloadType(PayloadType.SERVER_SYNC);
+        return sendToClient(payload);
+    }
+
+    /**
+     * Called by Server on each recipient's handler when a user joins.
+     * Bundles the new user's identity as SERVER_JOIN.
+     *
+     * @param user the user who joined, not necessarily this recipient
+     * @return true if sendToClient() completed the local write
+     */
+    protected boolean sendServerJoin(User user) {
         ConnectionPayload payload = new ConnectionPayload();
-        payload.setPayloadType(type);
-        payload.setClientId(id);
-        payload.setClientName(name);
+        payload.setPayloadType(PayloadType.SERVER_JOIN);
+        payload.setClientId(user.getClientId());
+        payload.setClientName(user.getClientName());
         return sendToClient(payload);
     }
 
@@ -90,13 +151,20 @@ public class ServerThread extends Thread {
         onInitializationComplete.accept(this);
     }
 
-    /** Notify the server after closing this client connection. */
+    /**
+     * Called when this handler's receive loop ends.
+     * Closes its connection and reports the lifecycle event to Server so the
+     * registry and other clients can be updated.
+     */
     private void onDisconnected() {
-        server.onServerThreadDisconnected(this);
+        Server.INSTANCE.onServerThreadDisconnected(this);
     }
 
     /** Route typed client input to its matching process method. */
     private void processPayload(Payload payload) {
+        if (Constants.LOG_PAYLOADS) {
+            LoggerUtil.INSTANCE.info(payload);
+        }
         if (payload == null || payload.getPayloadType() == null) {
             info("Ignoring an invalid payload");
             return;
@@ -132,56 +200,59 @@ public class ServerThread extends Thread {
         }
     }
 
-    /** Read chat data and pass ordinary text to the server handler. */
+    /**
+     * Called by processPayload() for a MESSAGE request.
+     * Extracts its text and asks Server.handleMessage() to apply the client's intent.
+     *
+     * @param payload the client's chat request
+     */
     private void processMessage(Payload payload) {
         if (isRegistered() && payload.getMessage() != null) {
-            server.handleMessage(this, payload.getMessage());
+            Server.INSTANCE.handleMessage(this, payload.getMessage());
         }
     }
 
-    /** Read the requested text before asking the server to reverse it. */
+    /**
+     * Called by processPayload() for a REVERSE request.
+     * Passes text to Server.handleReverseText(), using an empty string when absent.
+     *
+     * @param payload the client's reversal request
+     */
     private void processReverse(Payload payload) {
         if (!isRegistered()) {
             return;
         }
-        server.handleReverseText(this, payload.getMessage() == null ? "" : payload.getMessage());
+        Server.INSTANCE.handleReverseText(this, payload.getMessage() == null ? "" : payload.getMessage());
     }
 
-    /** Ask the server for the connected-user list. */
+    /**
+     * Called by processPayload() for a USERS request.
+     * Passes this connection to Server.handleGetUserList() so only its client
+     * receives the requested snapshot.
+     */
     private void processGetUserList() {
         if (!isRegistered()) {
             return;
         }
-        server.handleGetUserList(this);
+        Server.INSTANCE.handleGetUserList(this);
     }
 
-    /** Apply this client's request to disconnect. */
+    /**
+     * Called by processPayload() for a DISCONNECT request.
+     * Forwards the client's intent to Server.handleDisconnect(); an unexpected
+     * connection close uses the onDisconnected() lifecycle callback instead.
+     */
     private void processDisconnect() {
-        server.handleDisconnect(this);
+        Server.INSTANCE.handleDisconnect(this);
     }
 
-    /** Pass a registered client's readiness request to the game owner. */
-    private void processReady() {
-        if (isRegistered()) {
-            server.handleReady(this);
-        }
-    }
-
-    /** Pass a registered client's reset request to the game owner. */
-    private void processReset() {
-        if (isRegistered()) {
-            server.handleReset(this);
-        }
-    }
-
-    /** Interpret a typed coordinate action for the game owner. */
-    private void processGridAction(GridActionPayload payload) {
-        if (isRegistered()) {
-            server.handleGridAction(this, payload.getX(), payload.getY(), payload.getModifier());
-        }
-    }
-
-    /** Accept one valid name, then register this initialized connection. */
+    /**
+     * Called by processPayload() for CLIENT_CONNECT before registration.
+     * Accepts one nonblank name, stops the name timeout, and invokes the
+     * initialization callback so Server can assign an ID and register this client.
+     *
+     * @param payload the connection request containing the chosen name
+     */
     private void processClientConnect(ConnectionPayload payload) {
         if (isRegistered()) {
             return;
@@ -196,7 +267,72 @@ public class ServerThread extends Thread {
         onInitialized();
     }
 
-    /** Write this payload unchanged; success means the write completed. */
+    /**
+     * Called by Server to bundle a reverse-command result for this recipient.
+     * @param clientId the user who requested the reverse operation
+     * @param message the completed display text
+     * @return true after a local write, not a client acknowledgment
+     */
+    protected boolean sendReverse(long clientId, String message) {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.REVERSE);
+        payload.setClientId(clientId);
+        payload.setMessage(message);
+        return sendToClient(payload);
+    }
+
+    /**
+     * Called by Server to send display text to this handler's client.
+     * Builds the MESSAGE payload here, keeping payload construction out of Server.
+     *
+     * @param clientId the message sender's ID, not the recipient's ID
+     * @param message the display text for the recipient
+     * @return true if sendToClient() completed the local write
+     */
+    protected boolean sendMessage(long clientId, String message) {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.MESSAGE);
+        payload.setClientId(clientId);
+        payload.setMessage(message);
+        return sendToClient(payload);
+    }
+
+    /**
+     * Called by Server.handleGetUserList() on the requesting client's handler.
+     * Bundles the User records and this recipient's ID for the client's "you" label.
+     *
+     * @param users the current user records collected by Server
+     * @return true if sendToClient() completed the local write
+     */
+    protected boolean sendUserList(List<User> users) {
+        UserListPayload payload = new UserListPayload(users);
+        payload.setPayloadType(PayloadType.USERS);
+        payload.setClientId(getClientId());
+        return sendToClient(payload);
+    }
+
+    /**
+     * Called by Server on each remaining recipient's handler when a user leaves.
+     * Sends the departed ID; clients use their stored User for the leave notice.
+     *
+     * @param user the user who left
+     * @return true if sendToClient() completed the local write
+     */
+    protected boolean sendLeaveNotice(User user) {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.SERVER_LEAVE);
+        payload.setClientId(user.getClientId());
+        return sendToClient(payload);
+    }
+
+    /**
+     * Shared transport method used by this handler's action-specific send methods.
+     * Writes the payload unchanged and prevents concurrent sends from interleaving.
+     * A successful write does not confirm that the client processed the message.
+     *
+     * @param payload the already bundled outgoing message
+     * @return true if the local write completed; false if unavailable or it failed
+     */
     protected synchronized boolean sendToClient(Payload payload) {
         if (!isRunning || out == null || client.isClosed()) {
             return false;
@@ -265,5 +401,139 @@ public class ServerThread extends Thread {
             // Notify the server after this handler closes its connection.
             onDisconnected();
         }
+    }
+
+    /** Interpret this connection's READY payload and pass its intent to Server.handleReady() after registration. */
+    private void processReady() {
+        if (isRegistered()) {
+            Server.INSTANCE.handleReady(this);
+        }
+    }
+
+    /** Interpret this connection's RESET payload and pass its intent to Server.handleReset() after registration. */
+    private void processReset() {
+        if (isRegistered()) {
+            Server.INSTANCE.handleReset(this);
+        }
+    }
+
+        /**
+     * Bundle GameServer's public phase for this recipient.
+     * @param phase the authoritative session phase
+     * @return true after a local write, not client acknowledgment
+     */
+    protected boolean sendGamePhase(Phase phase) {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.GAME_PHASE_SYNC);
+        payload.setMessage(phase.name());
+        return sendToClient(payload);
+    }
+
+        /**
+     * Bundle one participant's public readiness for this recipient.
+     * @param clientId the participant whose status changed
+     * @param ready whether that participant is ready
+     * @return true after a local write, not client acknowledgment
+     */
+    protected boolean sendReadyStatus(long clientId, boolean ready) {
+        BoolPayload payload = new BoolPayload();
+        payload.setPayloadType(PayloadType.PLAYER_READY_STATUS);
+        payload.setClientId(clientId);
+        payload.setValue(ready);
+        return sendToClient(payload);
+    }
+
+    /**
+     * Pass the target and modifier from this endpoint to Server for game validation.
+     * @param payload the received grid action
+     */
+    private void processGridAction(GridActionPayload payload) {
+        if (isRegistered()) {
+            Server.INSTANCE.handleGridAction(this, payload.getX(), payload.getY(), payload.getModifier());
+        }
+    }
+
+    /**
+     * Bundle a public acted flag for one participant.
+     * @param clientId the participant
+     * @param acted whether the turn has been used
+     * @return true after a local write
+     */
+    protected boolean sendTurnStatus(long clientId, boolean acted) {
+        BoolPayload payload = new BoolPayload();
+        payload.setPayloadType(PayloadType.TURN_STATUS);
+        payload.setClientId(clientId);
+        payload.setValue(acted);
+        return sendToClient(payload);
+    }
+
+    /**
+     * Bundle the board dimensions and seed for this recipient.
+     * @param width board width, or zero for a reset
+     * @param height board height, or zero for a reset
+     * @param seed initial random seed
+     * @return true after a local write
+     */
+    protected boolean sendGridSeed(int width, int height, long seed) {
+        GridSeedPayload payload = new GridSeedPayload();
+        payload.setPayloadType(PayloadType.GRID_SEED_SYNC);
+        payload.setWidth(width);
+        payload.setHeight(height);
+        payload.setSeed(seed);
+        return sendToClient(payload);
+    }
+
+    /**
+     * Bundle a server-confirmed cell value for this recipient.
+     * @param x column
+     * @param y row
+     * @param value authoritative cell value
+     * @return true after a local write
+     */
+    protected boolean sendGridCell(int x, int y, int value) {
+        GridCellPayload payload = new GridCellPayload();
+        payload.setPayloadType(PayloadType.GRID_CELL_SYNC);
+        payload.setX(x);
+        payload.setY(y);
+        payload.setValue(value);
+        return sendToClient(payload);
+    }
+
+        /**
+     * Bundle GameServer-owned public points for this recipient.
+     * @param clientId the scored participant
+     * @param points the authoritative total
+     * @return true after a local write, not client acknowledgment
+     */
+    protected boolean sendPoints(long clientId, int points) {
+        IntPayload payload = new IntPayload();
+        payload.setPayloadType(PayloadType.POINTS);
+        payload.setClientId(clientId);
+        payload.setValue(points);
+        return sendToClient(payload);
+    }
+
+        /**
+     * Bundle the authoritative public round number for this recipient.
+     * @param round the current round
+     * @return true after a local write, not client acknowledgment
+     */
+    protected boolean sendRound(int round) {
+        IntPayload payload = new IntPayload();
+        payload.setPayloadType(PayloadType.ROUND_SYNC);
+        payload.setValue(round);
+        return sendToClient(payload);
+    }
+
+        /**
+     * Bundle the public turn owner for this recipient.
+     * @param clientId the owner ID, or zero between turns
+     * @return true after a local write, not client acknowledgment
+     */
+    protected boolean sendCurrentTurn(long clientId) {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.CURRENT_TURN);
+        payload.setClientId(clientId);
+        return sendToClient(payload);
     }
 }

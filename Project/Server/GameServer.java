@@ -8,117 +8,164 @@ import java.util.Timer;
 import java.util.TimerTask;
 
 /**
- * Owns a three-round grid example. Server's monitor serializes requests,
+ * Owns a three-round grid game. Server's monitor serializes requests,
  * disconnects, and deadlines; clients never choose cell results or points.
  */
 final class GameServer {
-    private static final long READY_MS = Math.max(1, Long.getLong("it114.readyMs", 30_000L));
-    private static final long TURN_MS = Math.max(1, Long.getLong("it114.turnMs", 30_000L));
+    private static final long READY_MS = 30_000L;
+    private static final long TURN_MS = 30_000L;
     private static final int LAST_ROUND = 3;
 
-    /** Server-only game state; public User remains the connection identity. */
+    /** Retains a participant User while connection ownership stays in Server. */
     private static final class SessionPlayer {
-        final ServerThread connection;
-        boolean acted;
-        int points;
+        final User user;
 
-        SessionPlayer(ServerThread connection) {
-            this.connection = connection;
+        SessionPlayer(User user) {
+            this.user = user;
         }
     }
 
-    private final Server server;
-    private final Timer timer = new Timer("game-deadlines", true);
+    private final Timer timer = new Timer(true);
     private final Map<Long, SessionPlayer> players = new LinkedHashMap<>();
     private Phase phase = Phase.INACTIVE;
-    private long generation;
+    private TimerTask activeDeadline;
     private int roundNumber;
     private Grid grid;
     private long gridSeed;
     private long currentTurnPlayerId;
 
-    GameServer(Server server) {
-        this.server = server;
-    }
 
-    /** Record one participant during the ready window. */
-    void handleReady(ServerThread sender) {
+    /** Apply a READY request forwarded by Server. The first accepted player starts the timed ready window.
+     *
+     * @param sender the requesting user
+     */
+    void handleReady(User sender) {
         if (phase != Phase.INACTIVE && phase != Phase.READY) {
-            sendMessageTo(sender, "Wait for the next ready check");
+            Server.INSTANCE.sendTo(sender.getClientId(), recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "Wait for the next ready check"));
             return;
         }
         if (players.containsKey(sender.getClientId())) {
-            sendMessageTo(sender, "You are already marked ready");
+            Server.INSTANCE.sendTo(sender.getClientId(), recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "You are already marked ready"));
             return;
         }
+        sender.setReady(true);
         players.put(sender.getClientId(), new SessionPlayer(sender));
         if (phase == Phase.INACTIVE) {
             phase = Phase.READY;
-            sendMessage("Ready check started; type /ready within thirty seconds");
-            sendPhaseToAll();
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "Ready check started; type /ready within " + ((READY_MS + 999) / 1000) + " seconds"));
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendGamePhase(phase));
             schedule(READY_MS);
         }
-        sendReadyStatusToAll(sender.getClientId(), true);
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendReadyStatus(sender.getClientId(), true));
     }
 
-    /** Validate one plus-pattern action before changing server-owned cells. */
-    void handleGridAction(ServerThread sender, int x, int y, int modifier) {
+    /** Apply a target plus pattern only for the current participant and a valid modifier.
+     * @param sender the requesting user
+     * @param x target column
+     * @param y target row
+     * @param modifier addition from 1 through 9
+     */
+    void handleGridAction(User sender, int x, int y, int modifier) {
         SessionPlayer player = players.get(sender.getClientId());
         if (phase != Phase.IN_PROGRESS || player == null) {
-            sendMessageTo(sender, "No active round for this player");
-        } else if (player.acted) {
-            sendMessageTo(sender, "You already acted this round");
+            sendMessageTo(sender.getClientId(), "No active round for this player");
+        } else if (player.user.isSubmitted()) {
+            sendMessageTo(sender.getClientId(), "You already acted this round");
         } else if (sender.getClientId() != currentTurnPlayerId) {
-            sendMessageTo(sender, "It is not your turn");
+            sendMessageTo(sender.getClientId(), "It is not your turn");
         } else if (grid == null || !grid.contains(x, y) || modifier < 1 || modifier > 9) {
-            sendMessageTo(sender, "Use /gridtest <x> <y> <value 1-9> inside the grid");
+            sendMessageTo(sender.getClientId(), "Use /gridtest <x> <y> <value 1-9> inside the grid");
         } else {
             java.util.List<int[]> affected = grid.applyModifier(x, y, modifier);
             for (int[] position : affected) {
-                sendGridCellToAll(position[0], position[1]);
+                sendGridCell(position[0], position[1]);
             }
             int gained = grid.countOdd(affected);
-            player.points += gained;
-            sendPointsToAll(sender.getClientId(), player.points);
-            sendMessage(sender.getDisplayName() + " changed the plus pattern at ("
-                    + x + ", " + y + ") and gained " + gained + " points");
-            player.acted = true;
-            sendTurnStatusToAll(sender.getClientId(), true);
+            player.user.setPoints(player.user.getPoints() + gained);
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(sender.getClientId(), player.user.getPoints()));
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID,
+                    sender.getDisplayName() + " changed the plus pattern at (" + x + ", " + y
+                    + ") and gained " + gained + " points"));
+            player.user.setSubmitted(true);
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(sender.getClientId(), true));
             onTurnEnd();
         }
     }
 
-    /** Let a participant end this example session and clear its state. */
-    void handleReset(ServerThread sender) {
+    /** Send an ordinary rejection only to its requester.
+     * @param recipientId the requester
+     * @param message explanation text
+     */
+    private void sendMessageTo(long recipientId, String message) {
+        Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, message));
+    }
+
+    /** Broadcast a confirmed cell after GameServer changes its authoritative grid.
+     * @param x column
+     * @param y row
+     */
+    private void sendGridCell(int x, int y) {
+        int value = grid.getValue(x, y);
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendGridCell(x, y, value));
+    }
+
+    /** Apply a RESET request forwarded by Server; only an active participant may clear the session.
+     *
+     * @param sender the requesting user
+     */
+    void handleReset(User sender) {
         if (!players.containsKey(sender.getClientId())) {
-            sendMessageTo(sender, "Only an active participant can reset");
+            Server.INSTANCE.sendTo(sender.getClientId(), recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "Only an active participant can reset"));
             return;
         }
         resetSession("Session reset; type /ready to join again");
     }
 
-    /** Discard stale timer callbacks before applying a phase deadline. */
-    void onTimer(long expectedGeneration) {
-        if (expectedGeneration != generation) {
+    /**
+     * Advance the current phase when its active deadline fires. A canceled callback
+     * can already be waiting for that monitor and must then be ignored.
+     *
+     * @param fired the TimerTask invoking this callback
+     */
+    void onTimer(TimerTask fired) {
+        if (fired != activeDeadline) {
             return;
         }
-        if (phase == Phase.READY) {
-            if (players.size() < 2) {
-                resetSession("At least two ready players are needed");
-            } else {
-                onSessionStart();
-            }
-        } else if (phase == Phase.IN_PROGRESS) {
-            onTurnTimeout();
+        activeDeadline = null;
+        switch (phase) {
+            case READY:
+                onReadyExpire();
+                break;
+            case IN_PROGRESS:
+                onTurnTimeout();
+                break;
+            case INACTIVE:
+                break;
         }
     }
 
-    /** Remove a participant and keep the current round moving. */
-    void onClientLeft(ServerThread client) {
+    /** Handle expiration of the ready window after onTimer validates its task. */
+    private void onReadyExpire() {
+        if (players.size() < 2) {
+            resetSession("At least two ready players are needed");
+        } else {
+            onSessionStart();
+        }
+    }
+
+
+    /** Update game state after Server removes a participant; advance or reset when needed.
+     *
+     * @param client the disconnected user
+     */
+    void onClientLeft(User client) {
         if (players.remove(client.getClientId()) == null) {
             return;
         }
-        sendReadyStatusToAll(client.getClientId(), false);
+        client.setReady(false);
+        client.setSubmitted(false);
+        client.setPoints(0);
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendReadyStatus(client.getClientId(), false));
         if (players.isEmpty()) {
             resetSession("Session ended because all players left");
         } else if (phase == Phase.IN_PROGRESS) {
@@ -130,77 +177,85 @@ final class GameServer {
         }
     }
 
-    /** Replay phase, turn, scores, seed, and authoritative cells to a joiner. */
-    void syncTo(ServerThread recipient) {
-        sendPhaseTo(recipient);
+    /** Sync authoritative public phase, scores, board, and turn to one newcomer.
+     * @param recipientId the joining connection
+     */
+    void syncTo(long recipientId) {
+        Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendGamePhase(phase));
         if (roundNumber > 0) {
-            sendRoundTo(recipient, roundNumber);
+            Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendRound(roundNumber));
         }
-        sendCurrentTurnTo(recipient, currentTurnPlayerId);
+        Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendCurrentTurn(currentTurnPlayerId));
         for (Map.Entry<Long, SessionPlayer> entry : new ArrayList<>(players.entrySet())) {
             long id = entry.getKey();
             SessionPlayer player = entry.getValue();
-            sendReadyStatusTo(recipient, id, true);
-            sendTurnStatusTo(recipient, id, player.acted);
-            sendPointsTo(recipient, id, player.points);
+            Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendReadyStatus(id, true));
+            Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendTurnStatus(id, player.user.isSubmitted()));
+            Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendPoints(id, player.user.getPoints()));
         }
         if (grid != null) {
-            sendGridSeedTo(recipient);
+            Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendGridSeed(grid.getWidth(), grid.getHeight(), gridSeed));
             for (int y = 0; y < grid.getHeight(); y++) {
                 for (int x = 0; x < grid.getWidth(); x++) {
-                    sendGridCellTo(recipient, x, y);
+                    int cellX = x;
+                    int cellY = y;
+                    int cellValue = grid.getValue(x, y);
+                    Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendGridCell(cellX, cellY, cellValue));
                 }
             }
         }
     }
 
-    /** Initialize one repeatable session. */
+    /** Start a repeatable seeded grid and the first round. */
     private void onSessionStart() {
         roundNumber = 0;
         for (SessionPlayer player : players.values()) {
-            player.points = 0;
+            player.user.setPoints(0);
         }
         gridSeed = System.currentTimeMillis();
         grid = new Grid(5, 5, gridSeed);
-        sendGridSeedToAll();
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendGridSeed(grid.getWidth(), grid.getHeight(), gridSeed));
         currentTurnPlayerId = 0;
         onRoundStart();
     }
 
-    /** Open a round of sequential grid actions. */
+    /** Open a round in which each participant can make one grid action. */
     private void onRoundStart() {
         roundNumber++;
         for (Map.Entry<Long, SessionPlayer> entry : players.entrySet()) {
-            entry.getValue().acted = false;
-            sendTurnStatusToAll(entry.getKey(), false);
+            entry.getValue().user.setSubmitted(false);
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(entry.getKey(), false));
         }
         phase = Phase.IN_PROGRESS;
-        sendPhaseToAll();
-        sendRoundToAll(roundNumber);
-        sendMessage("On your turn use /gridtest <x> <y> <value 1-9>");
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendGamePhase(phase));
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendRound(roundNumber));
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID,
+                "On your turn use /gridtest <x> <y> <value 1-9>"));
         onTurnStart();
     }
 
-    /** Choose the first unacted player in stable client-ID order. */
+    /** Choose the lowest-ID participant who has not acted, then announce the owner and deadline once. */
     private void onTurnStart() {
         currentTurnPlayerId = players.entrySet().stream()
-                .filter(entry -> !entry.getValue().acted)
+                .filter(entry -> !entry.getValue().user.isSubmitted())
                 .mapToLong(Map.Entry::getKey)
                 .min().orElse(0);
         if (currentTurnPlayerId == 0) {
             onRoundEnd();
             return;
         }
-        sendCurrentTurnToAll(currentTurnPlayerId);
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendCurrentTurn(currentTurnPlayerId));
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, players.get(currentTurnPlayerId).user.getDisplayName()
+                + " has " + ((TURN_MS + 999) / 1000) + " seconds to /gridtest <x> <y> <value 1-9>"));
         schedule(TURN_MS);
     }
 
-    /** Complete one turn and select another player or evaluate the round. */
+    /** Invalidate the finished turn deadline, then select another player or evaluate the round. */
     private void onTurnEnd() {
         if (phase != Phase.IN_PROGRESS) {
             return;
         }
-        generation++;
+        cancelDeadline();
         currentTurnPlayerId = 0;
         if (allActed()) {
             onRoundEnd();
@@ -209,27 +264,28 @@ final class GameServer {
         }
     }
 
-    /** A timed-out turn counts as taken without a cell change or points. */
+    /** Mark the owner as acted without a board change or point, then advance the turn. */
     private void onTurnTimeout() {
         SessionPlayer player = players.get(currentTurnPlayerId);
         if (player != null) {
-            player.acted = true;
-            sendTurnStatusToAll(currentTurnPlayerId, true);
+            player.user.setSubmitted(true);
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(currentTurnPlayerId, true));
         }
         onTurnEnd();
     }
 
-    /** Finish the round; points were awarded with each confirmed action. */
+    /** Finish a round; points were already awarded with each valid action. */
     private void onRoundEnd() {
         if (phase != Phase.IN_PROGRESS) {
             return;
         }
-        generation++;
+        cancelDeadline();
         currentTurnPlayerId = 0;
-        sendCurrentTurnToAll(0);
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendCurrentTurn(0));
         phase = Phase.EVALUATION;
-        sendPhaseToAll();
-        sendMessage("Round " + roundNumber + " complete");
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendGamePhase(phase));
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID,
+                "Round " + roundNumber + " complete"));
         if (roundNumber >= LAST_ROUND || players.isEmpty()) {
             onSessionEnd();
         } else {
@@ -237,218 +293,85 @@ final class GameServer {
         }
     }
 
-    /** Announce the highest score, including ties, before clearing points. */
+    /** Announce the highest public score, including ties, before clearing session points. */
     private void onSessionEnd() {
         if (!players.isEmpty()) {
-            int high = players.values().stream().mapToInt(player -> player.points).max().orElse(0);
+            int high = players.values().stream().mapToInt(player -> player.user.getPoints()).max().orElse(0);
             java.util.List<String> winners = new ArrayList<>();
             for (SessionPlayer player : players.values()) {
-                if (player.points == high) {
-                    winners.add(player.connection.getDisplayName());
+                if (player.user.getPoints() == high) {
+                    winners.add(player.user.getDisplayName());
                 }
             }
-            sendMessage("Highest score: " + high + " by " + String.join(", ", winners));
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "Highest score: " + high + " by " + String.join(", ", winners)));
         }
         resetSession("Example session finished; type /ready to repeat");
     }
 
-    /** Invalidate old timers and clear all state for a new ready window. */
+    /** Invalidate old deadlines, clear game state, and broadcast the public reset.
+     *
+     * @param message the public reset reason
+     */
     private void resetSession(String message) {
-        generation++;
-        for (long id : new ArrayList<>(players.keySet())) {
-            sendReadyStatusToAll(id, false);
-            sendTurnStatusToAll(id, false);
-            sendPointsToAll(id, 0);
+        cancelDeadline();
+        for (SessionPlayer player : new ArrayList<>(players.values())) {
+            player.user.setReady(false);
+            player.user.setSubmitted(false);
+            player.user.setPoints(0);
+            long id = player.user.getClientId();
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendReadyStatus(id, false));
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(id, false));
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(id, 0));
         }
         players.clear();
         roundNumber = 0;
         grid = null;
         gridSeed = 0;
-        sendGridResetToAll();
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendGridSeed(0, 0, 0));
         currentTurnPlayerId = 0;
-        sendCurrentTurnToAll(0);
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendCurrentTurn(0));
         phase = Phase.INACTIVE;
-        sendPhaseToAll();
-        sendMessage(message);
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendGamePhase(phase));
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, message));
     }
 
+    /**
+     * Check whether every remaining participant acted this round.
+     *
+     * @return true when every remaining participant has acted
+     */
     private boolean allActed() {
-        return !players.isEmpty() && players.values().stream().allMatch(player -> player.acted);
+        return !players.isEmpty() && players.values().stream().allMatch(player -> player.user.isSubmitted());
     }
 
-    /** A new deadline supersedes the prior deadline's generation. */
+    /** Cancel the active deadline before a reset or phase/turn replacement. */
+    private void cancelDeadline() {
+        if (activeDeadline != null) {
+            activeDeadline.cancel();
+            activeDeadline = null;
+        }
+    }
+
+    /**
+     * Replace the deadline. Its callback holds the same Server lock as client actions
+     * and finishes departure cleanup after the game event.
+     *
+     * @param delayMs milliseconds until the deadline
+     */
     private void schedule(long delayMs) {
-        long expected = ++generation;
-        timer.schedule(new TimerTask() {
+        cancelDeadline();
+        activeDeadline = new TimerTask() {
             @Override
             public void run() {
-                server.onGameTimer(expected);
+                synchronized (Server.INSTANCE) {
+                    try {
+                        onTimer(this);
+                    } finally {
+                        Server.INSTANCE.processDisconnectedBuffer();
+                    }
+                }
             }
-        }, delayMs);
-    }
-
-    /** Send the current phase to one client. */
-    private void sendPhaseTo(ServerThread recipient) {
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.GAME_PHASE_SYNC);
-        payload.setMessage(phase.name());
-        server.sendGameTo(recipient, payload);
-    }
-
-    /** Broadcast the current phase. */
-    private void sendPhaseToAll() {
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.GAME_PHASE_SYNC);
-        payload.setMessage(phase.name());
-        server.sendGameBroadcast(payload);
-    }
-
-    /** Send one ready flag privately as a state snapshot. */
-    private void sendReadyStatusTo(ServerThread recipient, long id, boolean ready) {
-        BoolPayload payload = new BoolPayload();
-        payload.setPayloadType(PayloadType.PLAYER_READY_STATUS);
-        payload.setClientId(id);
-        payload.setValue(ready);
-        server.sendGameTo(recipient, payload);
-    }
-
-    /** Broadcast one ready flag. */
-    private void sendReadyStatusToAll(long id, boolean ready) {
-        BoolPayload payload = new BoolPayload();
-        payload.setPayloadType(PayloadType.PLAYER_READY_STATUS);
-        payload.setClientId(id);
-        payload.setValue(ready);
-        server.sendGameBroadcast(payload);
-    }
-
-    /** Send one action-completed flag privately as a state snapshot. */
-    private void sendTurnStatusTo(ServerThread recipient, long id, boolean acted) {
-        BoolPayload payload = new BoolPayload();
-        payload.setPayloadType(PayloadType.TURN_STATUS);
-        payload.setClientId(id);
-        payload.setValue(acted);
-        server.sendGameTo(recipient, payload);
-    }
-
-    /** Broadcast a player's action-completed flag. */
-    private void sendTurnStatusToAll(long id, boolean acted) {
-        BoolPayload payload = new BoolPayload();
-        payload.setPayloadType(PayloadType.TURN_STATUS);
-        payload.setClientId(id);
-        payload.setValue(acted);
-        server.sendGameBroadcast(payload);
-    }
-
-    /** Sync the seeded starting grid to one newcomer. */
-    private void sendGridSeedTo(ServerThread recipient) {
-        GridSeedPayload payload = new GridSeedPayload();
-        payload.setPayloadType(PayloadType.GRID_SEED_SYNC);
-        payload.setWidth(grid.getWidth());
-        payload.setHeight(grid.getHeight());
-        payload.setSeed(gridSeed);
-        server.sendGameTo(recipient, payload);
-    }
-
-    /** Announce the seeded starting grid to all connected clients. */
-    private void sendGridSeedToAll() {
-        GridSeedPayload payload = new GridSeedPayload();
-        payload.setPayloadType(PayloadType.GRID_SEED_SYNC);
-        payload.setWidth(grid.getWidth());
-        payload.setHeight(grid.getHeight());
-        payload.setSeed(gridSeed);
-        server.sendGameBroadcast(payload);
-    }
-
-    /** Clear the client grid at session end. */
-    private void sendGridResetToAll() {
-        GridSeedPayload payload = new GridSeedPayload();
-        payload.setPayloadType(PayloadType.GRID_SEED_SYNC);
-        server.sendGameBroadcast(payload);
-    }
-
-    /** Send one authoritative cell value to a newcomer. */
-    private void sendGridCellTo(ServerThread recipient, int x, int y) {
-        GridCellPayload payload = new GridCellPayload();
-        payload.setPayloadType(PayloadType.GRID_CELL_SYNC);
-        payload.setX(x);
-        payload.setY(y);
-        payload.setValue(grid.getValue(x, y));
-        server.sendGameTo(recipient, payload);
-    }
-
-    /** Broadcast one server-confirmed changed cell. */
-    private void sendGridCellToAll(int x, int y) {
-        GridCellPayload payload = new GridCellPayload();
-        payload.setPayloadType(PayloadType.GRID_CELL_SYNC);
-        payload.setX(x);
-        payload.setY(y);
-        payload.setValue(grid.getValue(x, y));
-        server.sendGameBroadcast(payload);
-    }
-
-    /** Send one player's public points as a snapshot. */
-    private void sendPointsTo(ServerThread recipient, long id, int points) {
-        IntPayload payload = new IntPayload();
-        payload.setPayloadType(PayloadType.POINTS);
-        payload.setClientId(id);
-        payload.setValue(points);
-        server.sendGameTo(recipient, payload);
-    }
-
-    /** Broadcast a player's current points. */
-    private void sendPointsToAll(long id, int points) {
-        IntPayload payload = new IntPayload();
-        payload.setPayloadType(PayloadType.POINTS);
-        payload.setClientId(id);
-        payload.setValue(points);
-        server.sendGameBroadcast(payload);
-    }
-
-    /** Send the current round to a newcomer. */
-    private void sendRoundTo(ServerThread recipient, int round) {
-        IntPayload payload = new IntPayload();
-        payload.setPayloadType(PayloadType.ROUND_SYNC);
-        payload.setValue(round);
-        server.sendGameTo(recipient, payload);
-    }
-
-    /** Broadcast the new round number. */
-    private void sendRoundToAll(int round) {
-        IntPayload payload = new IntPayload();
-        payload.setPayloadType(PayloadType.ROUND_SYNC);
-        payload.setValue(round);
-        server.sendGameBroadcast(payload);
-    }
-
-    /** Sync the current turn owner to one newcomer. */
-    private void sendCurrentTurnTo(ServerThread recipient, long id) {
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.CURRENT_TURN);
-        payload.setClientId(id);
-        server.sendGameTo(recipient, payload);
-    }
-
-    /** Announce the one participant allowed to act. */
-    private void sendCurrentTurnToAll(long id) {
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.CURRENT_TURN);
-        payload.setClientId(id);
-        server.sendGameBroadcast(payload);
-    }
-
-    /** Broadcast ordinary explanation text. */
-    private void sendMessage(String message) {
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.MESSAGE);
-        payload.setMessage(message);
-        server.sendGameBroadcast(payload);
-    }
-
-    /** Send an ordinary explanation only to its requester. */
-    private void sendMessageTo(ServerThread recipient, String message) {
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.MESSAGE);
-        payload.setMessage(message);
-        server.sendGameTo(recipient, payload);
+        };
+        timer.schedule(activeDeadline, delayMs);
     }
 }
