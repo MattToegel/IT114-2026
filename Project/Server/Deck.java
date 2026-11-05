@@ -17,6 +17,9 @@ final class Deck {
     private final List<Integer> drawPile = new ArrayList<>();
     private final Random random = new Random();
 
+    /** Load and validate the session card catalog.
+     * @param file catalog file to read
+     */
     Deck(Path file) throws IOException {
         for (String line : Files.readAllLines(file)) {
             String trimmed = line.trim();
@@ -44,9 +47,19 @@ final class Deck {
         refill();
     }
 
+    /** Return public card definitions for synchronization.
+     * @return the immutable public card definitions
+     */
     List<Card> catalog() { return List.copyOf(catalog.values()); }
+    /** Look up a card definition when validating a proposed play.
+     * @param id card ID
+     * @return the card definition, or null for an unknown ID
+     */
     Card find(int id) { return catalog.get(id); }
 
+    /** Take one shuffled card ID for a turn owner.
+     * @return a shuffled card ID from the catalog
+     */
     int draw() {
         if (drawPile.isEmpty()) {
             refill();
@@ -54,6 +67,8 @@ final class Deck {
         return drawPile.remove(drawPile.size() - 1);
     }
 
+    /** Reshuffle all catalog IDs when the draw pile runs out.
+     */
     private void refill() {
         drawPile.addAll(catalog.keySet());
         Collections.shuffle(drawPile, random);

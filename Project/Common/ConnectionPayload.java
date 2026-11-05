@@ -1,6 +1,10 @@
 package Project.Common;
 
-/** A name supplied at connect time or confirmed with an assigned ID. */
+/**
+ * Carries a client name alongside the ID inherited from Payload.
+ * Used for the connection request, identity confirmation, and join/leave events.
+ * Client and ServerThread send/process methods bundle or read these fields.
+ */
 public class ConnectionPayload extends Payload {
     private String clientName;
 

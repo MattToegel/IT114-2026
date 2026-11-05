@@ -5,6 +5,9 @@ import java.util.List;
 
 /** Try the grid rule locally before sending any network payloads. */
 public class GridDemo {
+    /** Run the grid demonstration without opening a socket.
+     * @param args optional command-line arguments
+     */
     public static void main(String[] args) {
         Grid grid = new Grid(5, 5, 12345L);
         System.out.println("Initial seeded grid:");
