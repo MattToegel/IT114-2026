@@ -22,7 +22,8 @@ public class ServerThread extends Thread {
     /**
      * Called by Server when accepting a connection; retain its socket and setup callback.
      * @param client the accepted client socket
-     * @param onInitializationComplete callback after the client identity is registered
+     * @param onInitializationComplete callback after streams open and a valid name is received
+     *        Server assigns the ID and registers the connection when invoked
      */
     protected ServerThread(Socket client,
             java.util.function.Consumer<ServerThread> onInitializationComplete) {
