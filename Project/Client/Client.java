@@ -39,7 +39,9 @@ public enum Client {
     private enum Command {
         CONNECT("/connect"), DISCONNECT("/disconnect"), QUIT("/quit"),
         USERS("/users"), REVERSE("/reverse"), SET_NAME("/name"),
-        READY("/ready"), RESET("/reset");
+        READY("/ready"), RESET("/reset"),
+        // TODO: Remove this command when replacing the temporary guessing game.
+        GUESS("/guess");
 
         private final String trigger;
 
@@ -152,6 +154,14 @@ public enum Client {
             case RESET:
                 sendReset();
                 return true;
+            case GUESS:
+                // TODO: Remove this command handler when replacing the temporary guessing game.
+                try {
+                    sendGuess(Integer.parseInt(arguments.trim()));
+                } catch (NumberFormatException e) {
+                    LoggerUtil.INSTANCE.info("Use /guess <value>; choose a whole number from 1 to 5");
+                }
+                return true;
             case DISCONNECT:
                 sendDisconnect();
                 return true;
@@ -180,6 +190,19 @@ public enum Client {
      */
     private void sendReset() throws IOException {
         sendAction(PayloadType.RESET, null);
+    }
+
+    /**
+     * Send a typed guess; GameServer validates phase and participant eligibility.
+     * @param value the requested number from 1 through 5
+     * @throws IOException if the guess cannot be written to the server
+     */
+    private void sendGuess(int value) throws IOException {
+        // TODO: Remove this send method when replacing the temporary guessing game.
+        IntPayload payload = new IntPayload();
+        payload.setPayloadType(PayloadType.GUESS);
+        payload.setValue(value);
+        sendToServer(payload);
     }
 
     /**

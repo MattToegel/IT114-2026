@@ -190,6 +190,10 @@ public class ServerThread extends Thread {
             case RESET:
                 processReset();
                 break;
+            case GUESS:
+                // TODO: Remove this route when replacing the temporary guessing game.
+                processGuess((IntPayload) payload);
+                break;
             default:
                 info("Unsupported client message: " + payload.getPayloadType());
                 break;
@@ -232,6 +236,17 @@ public class ServerThread extends Thread {
     private void processReset() {
         if (isRegistered()) {
             Server.INSTANCE.handleReset(this);
+        }
+    }
+
+    /**
+     * Interpret this connection's typed GUESS payload before passing its number to Server.handleGuess().
+     * @param payload the received numeric request
+     */
+    private void processGuess(IntPayload payload) {
+        // TODO: Remove this request handler when replacing the temporary guessing game.
+        if (isRegistered()) {
+            Server.INSTANCE.handleGuess(this, payload.getValue());
         }
     }
 

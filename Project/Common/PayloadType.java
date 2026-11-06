@@ -18,5 +18,7 @@ public enum PayloadType {
     RESET,
     PLAYER_READY_STATUS,
     GAME_PHASE_SYNC,
-    POINTS
+    POINTS,
+    // TODO: Remove GUESS when replacing the temporary guessing game.
+    GUESS
 }

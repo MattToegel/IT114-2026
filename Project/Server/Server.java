@@ -205,6 +205,18 @@ public enum Server {
         }
     }
 
+    /** Forward a registered client's typed GUESS request; GameServer validates the temporary game rules. */
+    protected synchronized void handleGuess(ServerThread sender, int guess) {
+        // TODO: Remove this forwarding method when replacing the temporary guessing game.
+        if (connectedClients.get(sender.getClientId()) == sender) {
+            try {
+                gameServer.handleGuess(sender.getUser(), guess);
+            } finally {
+                processDisconnectedBuffer();
+            }
+        }
+    }
+
     /**
      * Handles a /users request from ServerThread.processGetUserList().
      * Reuses the initial-sync path to send a current snapshot only to the requester.

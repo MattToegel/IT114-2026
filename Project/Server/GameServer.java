@@ -14,11 +14,15 @@ final class GameServer {
 
     private static final long READY_MS = 30_000L;
 
-    private static final long SESSION_MS = 8_000L;
-
     private final Timer timer = new Timer(true);
 
     private final Map<Long, User> players = new LinkedHashMap<>();
+
+    // TODO: Remove the random generator and secret when implementing your project game.
+    private final java.util.Random guessRandom = new java.util.Random();
+
+    // TODO: Remove this temporary guessing-game field when implementing your project game.
+    private int secret;
 
     private Phase phase = Phase.INACTIVE;
 
@@ -48,6 +52,41 @@ final class GameServer {
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendReadyStatus(sender.getClientId(), true));
     }
 
+    /**
+     * Handle a numeric guess forwarded by Server.handleGuess() under the Server lock.
+     * Only active participants can score.
+     *
+     * @param sender the user who entered /guess
+     * @param guess the requested whole number from 1 through 5
+     */
+    void handleGuess(User sender, int guess) {
+        // TODO: Remove this temporary handler when implementing your project game.
+        if (phase != Phase.IN_PROGRESS || !players.containsKey(sender.getClientId())) {
+            return;
+        }
+        if (guess < 1 || guess > 5) {
+            Server.INSTANCE.sendTo(sender.getClientId(), recipient -> recipient.sendMessage(
+                    Constants.DEFAULT_CLIENT_ID, "Choose a number from 1 to 5"));
+            return;
+        }
+        if (guess != secret) {
+            Server.INSTANCE.sendTo(sender.getClientId(), recipient -> recipient.sendMessage(
+                    Constants.DEFAULT_CLIENT_ID, "Try again"));
+            return;
+        }
+        sender.setPoints(sender.getPoints() + 1);
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(sender.getClientId(), sender.getPoints()));
+        // TODO: Replace the five-point win condition with your project's scoring and end rules.
+        if (sender.getPoints() == 5) {
+            resetSession(sender.getDisplayName() + " wins with 5 points; type /ready to play again");
+        } else {
+            // TODO: Remove the next secret when replacing this temporary guessing game.
+            secret = guessRandom.nextInt(5) + 1;
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(
+                    Constants.DEFAULT_CLIENT_ID, "Correct! A new number is ready"));
+        }
+    }
+
     /** Apply a RESET request forwarded by Server; only an active participant may restart readiness.
      *
      * @param sender the requesting user
@@ -59,6 +98,7 @@ final class GameServer {
         }
         resetSession("Session reset; type /ready to join again");
     }
+
 
     /**
      * Advance the current phase when its active deadline fires. A canceled callback
@@ -76,8 +116,6 @@ final class GameServer {
                 onReadyExpire();
                 break;
             case IN_PROGRESS:
-                onSessionExpire();
-                break;
             case INACTIVE:
                 break;
         }
@@ -92,24 +130,18 @@ final class GameServer {
         }
     }
 
-    /**
-     * Start the practice session once after at least two players finish readiness.
-     * Award each participant one start bonus; this is replaced by guess scoring next lesson.
-     */
+    /** Start the session and publish each participant's initial score. */
     private void onSessionStart() {
         phase = Phase.IN_PROGRESS;
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendGamePhase(phase));
         for (User player : players.values()) {
-            player.setPoints(1);
+            player.setPoints(0);
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(player.getClientId(), player.getPoints()));
         }
-        Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "Practice session started; each ready player earned one start point"));
-        schedule(SESSION_MS);
-    }
-
-    /** Finish the timed example session when onTimer receives its active deadline. */
-    private void onSessionExpire() {
-        resetSession("Example session finished");
+        // TODO: Replace the secret and instructions with your project's session setup.
+        secret = guessRandom.nextInt(5) + 1;
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID,
+                "Use /guess <value> with a number from 1 to 5; each correct guess earns one point. First to 5 points wins"));
     }
 
     /** Clear a disconnected participant's points; spectator departure has no game effect.
