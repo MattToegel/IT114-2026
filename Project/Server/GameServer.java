@@ -209,6 +209,7 @@ final class GameServer {
         roundNumber = 0;
         for (User player : players.values()) {
             player.setPoints(0);
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(player.getClientId(), player.getPoints()));
         }
         gridSeed = System.currentTimeMillis();
         grid = new Grid(5, 5, gridSeed);
