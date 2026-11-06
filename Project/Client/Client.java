@@ -13,6 +13,7 @@ import java.util.Scanner;
 
 /** Terminal input stays on the main thread; one background thread receives messages. */
 public enum Client {
+
     INSTANCE;
 
     static {
@@ -95,7 +96,7 @@ public enum Client {
 
     /** Handle slash commands, including /users with the server-confirmed public score. */
     private boolean processClientCommand(String text) throws IOException {
-        String[] parts = text.trim().split("\\s+", 2);
+        String[] parts = text.strip().split("\\s+", 2);
         Command command = Command.fromText(parts[0]);
         if (command == null) {
             return false;
@@ -136,10 +137,11 @@ public enum Client {
                 }
                 return true;
             case USERS:
-                LoggerUtil.INSTANCE.info("Known clients:");
-                knownUsers.values().forEach(user -> LoggerUtil.INSTANCE.info(
+                StringBuilder builder = new StringBuilder("Known clients:\n");
+                knownUsers.values().forEach(user -> builder.append(
                         user.getDisplayName() + (user.isReady() ? " [ready]" : " [not ready]")
-                                + " points: " + user.getPoints()));
+                                + " points: " + user.getPoints() + "\n"));
+                LoggerUtil.INSTANCE.info(builder.toString());
                 return true;
             case REVERSE:
                 sendReverse(arguments);
@@ -160,6 +162,24 @@ public enum Client {
             default:
                 return false;
         }
+    }
+
+    /**
+     * Send this client's READY intent; only the server confirms readiness.
+     * Called by processClientCommand() for the matching slash command.
+     * @throws IOException if the request cannot be written to the server
+     */
+    private void sendReady() throws IOException {
+        sendAction(PayloadType.READY, null);
+    }
+
+    /**
+     * Send this client's RESET intent; GameServer checks participant eligibility.
+     * Called by processClientCommand() for the matching slash command.
+     * @throws IOException if the request cannot be written to the server
+     */
+    private void sendReset() throws IOException {
+        sendAction(PayloadType.RESET, null);
     }
 
     /**
@@ -311,6 +331,27 @@ public enum Client {
     }
 
     /**
+     * Display the authoritative phase received by processPayload().
+     * @param payload the public phase update
+     */
+    private void processGamePhase(Payload payload) {
+        LoggerUtil.INSTANCE.info("Game phase: " + payload.getMessage());
+    }
+
+    /**
+     * Apply the server's readiness update to the local User used by /users; sending /ready alone does not mark it ready.
+     * @param payload the participant ID and authoritative readiness value
+     */
+    private void processPlayerReadyStatus(BoolPayload payload) {
+        User user = knownUsers.get(payload.getClientId());
+        if (user != null) {
+            user.setReady(payload.getValue());
+            LoggerUtil.INSTANCE.info(user.getDisplayName()
+                    + (user.isReady() ? " ready" : " not ready"));
+        }
+    }
+
+    /**
      * Called by processPayload() for SERVER_SYNC.
      * Adds the server's existing-user snapshot to the local map; later join and
      * leave events keep that map current.
@@ -432,45 +473,6 @@ public enum Client {
     /** Start the course's terminal client. */
     public static void main(String[] args) {
         Client.INSTANCE.start();
-    }
-
-        /**
-     * Send this client's READY intent; only the server confirms readiness.
-     * Called by processClientCommand() for the matching slash command.
-     * @throws IOException if the request cannot be written to the server
-     */
-    private void sendReady() throws IOException {
-        sendAction(PayloadType.READY, null);
-    }
-
-        /**
-     * Send this client's RESET intent; GameServer checks participant eligibility.
-     * Called by processClientCommand() for the matching slash command.
-     * @throws IOException if the request cannot be written to the server
-     */
-    private void sendReset() throws IOException {
-        sendAction(PayloadType.RESET, null);
-    }
-
-        /**
-     * Display the authoritative phase received by processPayload().
-     * @param payload the public phase update
-     */
-    private void processGamePhase(Payload payload) {
-        LoggerUtil.INSTANCE.info("Game phase: " + payload.getMessage());
-    }
-
-        /**
-     * Apply the server's readiness update to the local User used by /users; sending /ready alone does not mark it ready.
-     * @param payload the participant ID and authoritative readiness value
-     */
-    private void processPlayerReadyStatus(BoolPayload payload) {
-        User user = knownUsers.get(payload.getClientId());
-        if (user != null) {
-            user.setReady(payload.getValue());
-            LoggerUtil.INSTANCE.info(user.getDisplayName()
-                    + (user.isReady() ? " ready" : " not ready"));
-        }
     }
 
     /**
