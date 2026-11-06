@@ -11,6 +11,10 @@ public class User implements java.io.Serializable {
     private volatile boolean ready;
     private volatile boolean submitted;
     private volatile int points;
+    // TODO: Remove the temporary guess and its accessors when implementing your project game.
+    // transient omits this field when User is written to an ObjectOutputStream.
+    // Received copies start at 0; GUESS_CONFIRM sends the owner's value privately.
+    private transient int guess;
 
     public User(long clientId, String clientName) {
         this.clientId = clientId;
@@ -72,6 +76,22 @@ public class User implements java.io.Serializable {
      */
     public void setPoints(int points) {
         this.points = points;
+    }
+
+    /**
+     * Read GameServer's temporary guess for round evaluation.
+     * @return the server-side guess, or zero when none is stored
+     */
+    public int getGuess() {
+        return guess;
+    }
+
+    /**
+     * Called by GameServer to record or clear this round's temporary guess.
+     * @param guess a number from 1 through 5, or zero to clear it
+     */
+    public void setGuess(int guess) {
+        this.guess = guess;
     }
 
     @Override

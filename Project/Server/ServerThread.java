@@ -191,6 +191,7 @@ public class ServerThread extends Thread {
                 processReset();
                 break;
             case GUESS:
+                // TODO: Remove this route when replacing the temporary guessing game.
                 processGuess((IntPayload) payload);
                 break;
             default:
@@ -243,6 +244,7 @@ public class ServerThread extends Thread {
      * @param payload the received numeric request
      */
     private void processGuess(IntPayload payload) {
+        // TODO: Remove this request handler when replacing the temporary guessing game.
         if (isRegistered()) {
             Server.INSTANCE.handleGuess(this, payload.getValue());
         }
@@ -474,6 +476,7 @@ public class ServerThread extends Thread {
      * @return true after a local write, not client acknowledgment
      */
     protected boolean sendGuessStatus(long clientId, boolean guessed) {
+        // TODO: Replace this guessing-game status with your project's action status.
         BoolPayload payload = new BoolPayload();
         payload.setPayloadType(PayloadType.GUESS_STATUS);
         payload.setClientId(clientId);
@@ -487,6 +490,7 @@ public class ServerThread extends Thread {
      * @return true after a local write, not client acknowledgment
      */
     protected boolean sendGuessConfirmation(int guess) {
+        // TODO: Replace this guessing-game confirmation with your project's action feedback.
         IntPayload payload = new IntPayload();
         payload.setPayloadType(PayloadType.GUESS_CONFIRM);
         payload.setValue(guess);
