@@ -304,6 +304,20 @@ public class ServerThread extends Thread {
     }
 
     /**
+     * Bundle GameServer-owned public points for this recipient.
+     * @param clientId the scored participant
+     * @param points the authoritative total
+     * @return true after a local write, not client acknowledgment
+     */
+    protected boolean sendPoints(long clientId, int points) {
+        IntPayload payload = new IntPayload();
+        payload.setPayloadType(PayloadType.POINTS);
+        payload.setClientId(clientId);
+        payload.setValue(points);
+        return sendToClient(payload);
+    }
+
+    /**
      * Called by Server to bundle a reverse-command result for this recipient.
      * @param clientId the user who requested the reverse operation
      * @param message the completed display text
@@ -437,19 +451,5 @@ public class ServerThread extends Thread {
             // Notify the server after this handler closes its connection.
             onDisconnected();
         }
-    }
-
-    /**
-     * Bundle GameServer-owned public points for this recipient.
-     * @param clientId the scored participant
-     * @param points the authoritative total
-     * @return true after a local write, not client acknowledgment
-     */
-    protected boolean sendPoints(long clientId, int points) {
-        IntPayload payload = new IntPayload();
-        payload.setPayloadType(PayloadType.POINTS);
-        payload.setClientId(clientId);
-        payload.setValue(points);
-        return sendToClient(payload);
     }
 }

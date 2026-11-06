@@ -16,7 +16,6 @@ final class GameServer {
 
     private static final long SESSION_MS = 8_000L;
 
-
     private final Timer timer = new Timer(true);
 
     private final Map<Long, User> players = new LinkedHashMap<>();
@@ -24,7 +23,6 @@ final class GameServer {
     private Phase phase = Phase.INACTIVE;
 
     private TimerTask activeDeadline;
-
 
     /** Apply a READY request forwarded by Server. A newcomer during play waits for the next session.
      *
@@ -94,11 +92,25 @@ final class GameServer {
         }
     }
 
+    /**
+     * Start the practice session once after at least two players finish readiness.
+     * Award each participant one start bonus; this is replaced by guess scoring next lesson.
+     */
+    private void onSessionStart() {
+        phase = Phase.IN_PROGRESS;
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendGamePhase(phase));
+        for (User player : players.values()) {
+            player.setPoints(1);
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(player.getClientId(), player.getPoints()));
+        }
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "Practice session started; each ready player earned one start point"));
+        schedule(SESSION_MS);
+    }
+
     /** Finish the timed example session when onTimer receives its active deadline. */
     private void onSessionExpire() {
         resetSession("Example session finished");
     }
-
 
     /** Clear a disconnected participant's points; spectator departure has no game effect.
      *
@@ -132,21 +144,6 @@ final class GameServer {
             Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendReadyStatus(id, true));
             Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendPoints(id, players.get(id).getPoints()));
         }
-    }
-
-    /**
-     * Start the practice session once after at least two players finish readiness.
-     * Award each participant one start bonus; this is replaced by guess scoring next lesson.
-     */
-    private void onSessionStart() {
-        phase = Phase.IN_PROGRESS;
-        Server.INSTANCE.sendGameAction(recipient -> recipient.sendGamePhase(phase));
-        for (User player : players.values()) {
-            player.setPoints(1);
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(player.getClientId(), player.getPoints()));
-        }
-        Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "Practice session started; each ready player earned one start point"));
-        schedule(SESSION_MS);
     }
 
     /** Invalidate old deadlines, clear readiness and points, and broadcast the reset state.
