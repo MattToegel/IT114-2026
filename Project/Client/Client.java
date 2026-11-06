@@ -39,7 +39,9 @@ public enum Client {
     private enum Command {
         CONNECT("/connect"), DISCONNECT("/disconnect"), QUIT("/quit"),
         USERS("/users"), REVERSE("/reverse"), SET_NAME("/name"),
-        READY("/ready"), RESET("/reset"), GUESS("/guess");
+        READY("/ready"), RESET("/reset"),
+        // TODO: Remove this command when replacing the temporary guessing game.
+        GUESS("/guess");
 
         private final String trigger;
 
@@ -94,7 +96,7 @@ public enum Client {
         }
     }
 
-    /** Handle a recognized slash command and leave ordinary chat text to the caller. */
+    /** Handle slash commands, including /users with the server-confirmed public score. */
     private boolean processClientCommand(String text) throws IOException {
         String[] parts = text.strip().split("\\s+", 2);
         Command command = Command.fromText(parts[0]);
@@ -154,10 +156,11 @@ public enum Client {
                 sendReset();
                 return true;
             case GUESS:
+                // TODO: Remove this command handler when replacing the temporary guessing game.
                 try {
                     sendGuess(Integer.parseInt(arguments.trim()));
                 } catch (NumberFormatException e) {
-                    LoggerUtil.INSTANCE.info("Use /guess <1-10>");
+                    LoggerUtil.INSTANCE.info("Use /guess <value>; choose a whole number from 1 to 5");
                 }
                 return true;
             case DISCONNECT:
@@ -192,10 +195,11 @@ public enum Client {
 
     /**
      * Send a typed guess; GameServer validates phase and participant eligibility.
-     * @param value the requested number from 1 through 10
+     * @param value the requested number from 1 through 5
      * @throws IOException if the guess cannot be written to the server
      */
     private void sendGuess(int value) throws IOException {
+        // TODO: Remove this send method when replacing the temporary guessing game.
         IntPayload payload = new IntPayload();
         payload.setPayloadType(PayloadType.GUESS);
         payload.setValue(value);
@@ -523,6 +527,7 @@ public enum Client {
      * @param payload the value returned on this owner's connection
      */
     private void processGuessConfirmation(IntPayload payload) {
+        // TODO: Replace this guessing-game display with your project's action feedback.
         LoggerUtil.INSTANCE.info("Your guess: " + payload.getValue());
     }
 
@@ -531,6 +536,7 @@ public enum Client {
      * @param payload the participant ID and submitted or timed-out flag
      */
     private void processGuessStatus(BoolPayload payload) {
+        // TODO: Replace this guessing-game status with your project's action status.
         User user = knownUsers.get(payload.getClientId());
         if (user != null) {
             user.setSubmitted(payload.getValue());
