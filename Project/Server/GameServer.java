@@ -224,6 +224,7 @@ final class GameServer {
         roundNumber = 0;
         for (User player : players.values()) {
             player.setPoints(0);
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(player.getClientId(), player.getPoints()));
             hands.get(player.getClientId()).clear();
         }
         try {
