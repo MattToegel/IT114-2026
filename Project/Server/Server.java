@@ -12,6 +12,7 @@ import java.util.function.Function;
 
 /** Accepts connections and selects the recipients of each message. */
 public enum Server {
+
     INSTANCE;
 
     static {
@@ -23,10 +24,17 @@ public enum Server {
     }
 
     private final ConcurrentHashMap<Long, ServerThread> connectedClients = new ConcurrentHashMap<>();
+
     private final List<ServerThread> disconnectedBuffer = new ArrayList<>();
+
     private volatile boolean isRunning = true;
+
     private volatile ServerSocket listener;
+
     private long nextClientId = 1;
+
+    // The Server monitor owns connection callbacks and all game transitions.
+    private final GameServer gameServer = new GameServer();
 
     /** Register resource cleanup for JVM shutdown. */
     private Server() {
@@ -118,7 +126,6 @@ public enum Server {
         return true;
     }
 
-
     /**
      * Called by onServerThreadInitialized() after the newcomer is registered.
      * Asks each recipient's ServerThread to bundle the new User as a join event.
@@ -174,6 +181,28 @@ public enum Server {
     protected synchronized void onServerThreadDisconnected(ServerThread client) {
         removeClient(client);
         processDisconnectedBuffer();
+    }
+
+    /** Forward a registered client's READY request to GameServer under the shared monitor. */
+    protected synchronized void handleReady(ServerThread sender) {
+        if (connectedClients.get(sender.getClientId()) == sender) {
+            try {
+                gameServer.handleReady(sender.getUser());
+            } finally {
+                processDisconnectedBuffer();
+            }
+        }
+    }
+
+    /** Forward a registered client's RESET request; GameServer decides eligibility. */
+    protected synchronized void handleReset(ServerThread sender) {
+        if (connectedClients.get(sender.getClientId()) == sender) {
+            try {
+                gameServer.handleReset(sender.getUser());
+            } finally {
+                processDisconnectedBuffer();
+            }
+        }
     }
 
     /**
@@ -308,31 +337,6 @@ public enum Server {
             return;
         }
         Server.INSTANCE.start(port);
-    }
-
-    // The Server monitor owns connection callbacks and all game transitions.
-    private final GameServer gameServer = new GameServer();
-
-    /** Forward a registered client's READY request to GameServer under the shared monitor. */
-    protected synchronized void handleReady(ServerThread sender) {
-        if (connectedClients.get(sender.getClientId()) == sender) {
-            try {
-                gameServer.handleReady(sender.getUser());
-            } finally {
-                processDisconnectedBuffer();
-            }
-        }
-    }
-
-    /** Forward a registered client's RESET request; GameServer decides eligibility. */
-    protected synchronized void handleReset(ServerThread sender) {
-        if (connectedClients.get(sender.getClientId()) == sender) {
-            try {
-                gameServer.handleReset(sender.getUser());
-            } finally {
-                processDisconnectedBuffer();
-            }
-        }
     }
 
     /** Forward a registered client's typed GUESS request; GameServer validates its turn rules. */
