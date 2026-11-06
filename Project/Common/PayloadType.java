@@ -1,6 +1,9 @@
 package Project.Common;
 
-/** The action carried by a Payload. */
+/**
+ * Identifies the request, response, or event carried by a Payload.
+ * Client and ServerThread processPayload() methods use it to choose a handler.
+ */
 public enum PayloadType {
     MESSAGE,
     REVERSE,
@@ -15,14 +18,14 @@ public enum PayloadType {
     RESET,
     PLAYER_READY_STATUS,
     GAME_PHASE_SYNC,
+    POINTS,
+    ROUND_SYNC,
+    CURRENT_TURN,
     TURN_STATUS,
     GRID_SEED_SYNC,
     GRID_CELL_SYNC,
     CARD_ACTION,
     CARD_CATALOG_SYNC,
     CARD_HAND_SYNC,
-    CARD_COUNT_SYNC,
-    POINTS,
-    ROUND_SYNC,
-    CURRENT_TURN
+    CARD_COUNT_SYNC
 }

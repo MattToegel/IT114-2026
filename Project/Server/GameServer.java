@@ -1,11 +1,17 @@
 package Project.Server;
 
 import Project.Common.*;
+import Project.Exceptions.IT114CustomException;
+import Project.Exceptions.SessionNotInProgressException;
+import Project.Exceptions.NotParticipantException;
+import Project.Exceptions.AlreadySubmittedException;
+import Project.Exceptions.NotYourTurnException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.List;
 import java.io.IOException;
 import java.nio.file.Path;
 
@@ -23,19 +29,12 @@ final class GameServer {
 
     private static final int HAND_SIZE = 3;
 
-    /** Retains a participant User while connection ownership stays in Server. */
-    private static final class SessionPlayer {
-        final User user;
-        final java.util.List<Integer> hand = new ArrayList<>();
-
-        SessionPlayer(User user) {
-            this.user = user;
-        }
-    }
-
     private final Timer timer = new Timer(true);
 
-    private final Map<Long, SessionPlayer> players = new LinkedHashMap<>();
+    private final Map<Long, User> players = new LinkedHashMap<>();
+
+    /** Private card IDs by participant; hands are never placed in shared User records. */
+    private final Map<Long, List<Integer>> hands = new LinkedHashMap<>();
 
     private Phase phase = Phase.INACTIVE;
 
@@ -51,6 +50,49 @@ final class GameServer {
 
     private long currentTurnPlayerId;
 
+    /**
+     * Reject game actions outside an active session before they can change game state.
+     * @throws SessionNotInProgressException when the session is not in progress
+     */
+    private void checkSessionInProgress() throws SessionNotInProgressException {
+        if (phase != Phase.IN_PROGRESS) {
+            throw new SessionNotInProgressException();
+        }
+    }
+
+    /**
+     * Reject spectators so only participants from the current ready check can act.
+     * @param sender the requesting user
+     * @throws NotParticipantException when the user is a spectator
+     */
+    private void checkIsParticipant(User sender) throws NotParticipantException {
+        if (!players.containsKey(sender.getClientId())) {
+            throw new NotParticipantException();
+        }
+    }
+
+    /**
+     * Reject repeated actions to enforce the current one-action-per-round rule.
+     * @param sender the requesting participant
+     * @throws AlreadySubmittedException when the participant already acted
+     */
+    private void checkNotSubmitted(User sender) throws AlreadySubmittedException {
+        if (sender.isSubmitted()) {
+            throw new AlreadySubmittedException();
+        }
+    }
+
+    /**
+     * Reject actions from other players to enforce the server's current turn.
+     * @param sender the requesting participant
+     * @throws NotYourTurnException when another participant owns the turn
+     */
+    private void checkTakeTurn(User sender) throws NotYourTurnException {
+        if (sender.getClientId() != currentTurnPlayerId) {
+            throw new NotYourTurnException();
+        }
+    }
+
     /** Apply a READY request forwarded by Server. The first accepted player starts the timed ready window.
      *
      * @param sender the requesting user
@@ -65,7 +107,8 @@ final class GameServer {
             return;
         }
         sender.setReady(true);
-        players.put(sender.getClientId(), new SessionPlayer(sender));
+        players.put(sender.getClientId(), sender);
+        hands.put(sender.getClientId(), new ArrayList<>());
         if (phase == Phase.INACTIVE) {
             phase = Phase.READY;
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "Ready check started; type /ready within " + ((READY_MS + 999) / 1000) + " seconds"));
@@ -82,34 +125,36 @@ final class GameServer {
      * @param y target row
      */
     void handleCardAction(User sender, int cardId, int x, int y) {
-        SessionPlayer player = players.get(sender.getClientId());
-        if (phase != Phase.IN_PROGRESS || player == null) {
-            sendMessageTo(sender.getClientId(), "No active round for this player");
-        } else if (player.user.isSubmitted()) {
-            sendMessageTo(sender.getClientId(), "You already acted this round");
-        } else if (sender.getClientId() != currentTurnPlayerId) {
-            sendMessageTo(sender.getClientId(), "It is not your turn");
-        } else if (grid == null || !grid.contains(x, y) || cardId < 1
-                || deck == null || !player.hand.contains(cardId) || deck.find(cardId) == null) {
-            sendMessageTo(sender.getClientId(), "Use /card <cardId> <x> <y> with a card in your hand and a grid cell");
-        } else {
+        User player = players.get(sender.getClientId());
+        try {
+            checkSessionInProgress();
+            checkIsParticipant(sender);
+            checkNotSubmitted(sender);
+            checkTakeTurn(sender);
+            if (grid == null || !grid.contains(x, y) || cardId < 1
+                    || deck == null || !hands.get(player.getClientId()).contains(cardId) || deck.find(cardId) == null) {
+                sendMessageTo(sender.getClientId(), "Use /card <cardId> <x> <y> with a card in your hand and a grid cell");
+                return;
+            }
             Card card = deck.find(cardId);
-            java.util.List<int[]> affected = grid.applyModifier(x, y, card.getModifier());
+            List<int[]> affected = grid.applyModifier(x, y, card.getModifier());
             for (int[] position : affected) {
                 sendGridCell(position[0], position[1]);
             }
             int gained = grid.countOdd(affected);
-            player.user.setPoints(player.user.getPoints() + gained);
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(sender.getClientId(), player.user.getPoints()));
-            player.hand.remove(Integer.valueOf(cardId));
-            Server.INSTANCE.sendTo(sender.getClientId(), recipient -> recipient.sendCardHand(player.hand));
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCount(sender.getClientId(), player.hand.size()));
+            player.setPoints(player.getPoints() + gained);
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(sender.getClientId(), player.getPoints()));
+            hands.get(player.getClientId()).remove(Integer.valueOf(cardId));
+            Server.INSTANCE.sendTo(sender.getClientId(), recipient -> recipient.sendCardHand(hands.get(player.getClientId())));
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCount(sender.getClientId(), hands.get(player.getClientId()).size()));
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID,
                     sender.getDisplayName() + " played card " + cardId + " at (" + x + ", " + y
                     + ") and gained " + gained + " points"));
-            player.user.setSubmitted(true);
+            player.setSubmitted(true);
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(sender.getClientId(), true));
             onTurnEnd();
+        } catch (IT114CustomException exception) {
+            sendMessageTo(sender.getClientId(), exception.getMessage());
         }
     }
 
@@ -177,9 +222,9 @@ final class GameServer {
     /** Start a repeatable seeded grid and the first round. */
     private void onSessionStart() {
         roundNumber = 0;
-        for (SessionPlayer player : players.values()) {
-            player.user.setPoints(0);
-            player.hand.clear();
+        for (User player : players.values()) {
+            player.setPoints(0);
+            hands.get(player.getClientId()).clear();
         }
         try {
             deck = new Deck(Path.of("Project/Server/cards.txt"));
@@ -200,11 +245,11 @@ final class GameServer {
      * @param client the disconnected user
      */
     void onClientLeft(User client) {
-        SessionPlayer departed = players.remove(client.getClientId());
+        User departed = players.remove(client.getClientId());
         if (departed == null) {
             return;
         }
-        departed.hand.clear();
+        hands.remove(client.getClientId());
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCount(client.getClientId(), 0));
         client.setReady(false);
         client.setSubmitted(false);
@@ -230,12 +275,12 @@ final class GameServer {
             Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendRound(roundNumber));
         }
         Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendCurrentTurn(currentTurnPlayerId));
-        for (Map.Entry<Long, SessionPlayer> entry : new ArrayList<>(players.entrySet())) {
+        for (Map.Entry<Long, User> entry : players.entrySet()) {
             long id = entry.getKey();
-            SessionPlayer player = entry.getValue();
+            User player = entry.getValue();
             Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendReadyStatus(id, true));
-            Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendTurnStatus(id, player.user.isSubmitted()));
-            Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendPoints(id, player.user.getPoints()));
+            Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendTurnStatus(id, player.isSubmitted()));
+            Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendPoints(id, player.getPoints()));
         }
         if (grid != null) {
             Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendGridSeed(grid.getWidth(), grid.getHeight(), gridSeed));
@@ -250,12 +295,12 @@ final class GameServer {
         }
         if (deck != null) {
             Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendCardCatalog(deck.catalog()));
-            for (Map.Entry<Long, SessionPlayer> entry : new ArrayList<>(players.entrySet())) {
+            for (Map.Entry<Long, User> entry : players.entrySet()) {
                 long id = entry.getKey();
-                SessionPlayer player = entry.getValue();
-                Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendCardCount(id, player.hand.size()));
+                User player = entry.getValue();
+                Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendCardCount(id, hands.get(player.getClientId()).size()));
                 if (id == recipientId) {
-                    Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendCardHand(player.hand));
+                    Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendCardHand(hands.get(player.getClientId())));
                 }
             }
         }
@@ -264,8 +309,8 @@ final class GameServer {
     /** Open a round in which each participant can make one grid action. */
     private void onRoundStart() {
         roundNumber++;
-        for (Map.Entry<Long, SessionPlayer> entry : players.entrySet()) {
-            entry.getValue().user.setSubmitted(false);
+        for (Map.Entry<Long, User> entry : players.entrySet()) {
+            entry.getValue().setSubmitted(false);
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(entry.getKey(), false));
         }
         phase = Phase.IN_PROGRESS;
@@ -279,21 +324,21 @@ final class GameServer {
     /** Choose the lowest-ID participant who has not acted, then announce the owner and deadline once. */
     private void onTurnStart() {
         currentTurnPlayerId = players.entrySet().stream()
-                .filter(entry -> !entry.getValue().user.isSubmitted())
+                .filter(entry -> !entry.getValue().isSubmitted())
                 .mapToLong(Map.Entry::getKey)
                 .min().orElse(0);
         if (currentTurnPlayerId == 0) {
             onRoundEnd();
             return;
         }
-        SessionPlayer current = players.get(currentTurnPlayerId);
-        while (current.hand.size() < HAND_SIZE) {
-            current.hand.add(deck.draw());
+        User current = players.get(currentTurnPlayerId);
+        while (hands.get(current.getClientId()).size() < HAND_SIZE) {
+            hands.get(current.getClientId()).add(deck.draw());
         }
-        Server.INSTANCE.sendTo(currentTurnPlayerId, recipient -> recipient.sendCardHand(current.hand));
-        Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCount(currentTurnPlayerId, current.hand.size()));
+        Server.INSTANCE.sendTo(currentTurnPlayerId, recipient -> recipient.sendCardHand(hands.get(current.getClientId())));
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCount(currentTurnPlayerId, hands.get(current.getClientId()).size()));
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendCurrentTurn(currentTurnPlayerId));
-        Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, players.get(currentTurnPlayerId).user.getDisplayName()
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, players.get(currentTurnPlayerId).getDisplayName()
                 + " has " + ((TURN_MS + 999) / 1000) + " seconds to /card <cardId> <x> <y>"));
         schedule(TURN_MS);
     }
@@ -314,9 +359,9 @@ final class GameServer {
 
     /** Mark the owner as acted without a board change or point, then advance the turn. */
     private void onTurnTimeout() {
-        SessionPlayer player = players.get(currentTurnPlayerId);
+        User player = players.get(currentTurnPlayerId);
         if (player != null) {
-            player.user.setSubmitted(true);
+            player.setSubmitted(true);
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(currentTurnPlayerId, true));
         }
         onTurnEnd();
@@ -344,11 +389,11 @@ final class GameServer {
     /** Announce the highest public score, including ties, before clearing session points. */
     private void onSessionEnd() {
         if (!players.isEmpty()) {
-            int high = players.values().stream().mapToInt(player -> player.user.getPoints()).max().orElse(0);
-            java.util.List<String> winners = new ArrayList<>();
-            for (SessionPlayer player : players.values()) {
-                if (player.user.getPoints() == high) {
-                    winners.add(player.user.getDisplayName());
+            int high = players.values().stream().mapToInt(player -> player.getPoints()).max().orElse(0);
+            List<String> winners = new ArrayList<>();
+            for (User player : players.values()) {
+                if (player.getPoints() == high) {
+                    winners.add(player.getDisplayName());
                 }
             }
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "Highest score: " + high + " by " + String.join(", ", winners)));
@@ -362,24 +407,25 @@ final class GameServer {
      */
     private void resetSession(String message) {
         cancelDeadline();
-        for (SessionPlayer player : new ArrayList<>(players.values())) {
-            player.user.setReady(false);
-            player.user.setSubmitted(false);
-            player.user.setPoints(0);
-            long id = player.user.getClientId();
-            player.hand.clear();
-            Server.INSTANCE.sendTo(id, recipient -> recipient.sendCardHand(player.hand));
+        for (User player : players.values()) {
+            player.setReady(false);
+            player.setSubmitted(false);
+            player.setPoints(0);
+            long id = player.getClientId();
+            hands.get(player.getClientId()).clear();
+            Server.INSTANCE.sendTo(id, recipient -> recipient.sendCardHand(hands.get(player.getClientId())));
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCount(id, 0));
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendReadyStatus(id, false));
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(id, false));
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(id, 0));
         }
         players.clear();
+        hands.clear();
         roundNumber = 0;
         grid = null;
         gridSeed = 0;
         deck = null;
-        Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCatalog(java.util.List.of()));
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCatalog(List.of()));
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendGridSeed(0, 0, 0));
         currentTurnPlayerId = 0;
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendCurrentTurn(0));
@@ -394,7 +440,7 @@ final class GameServer {
      * @return true when every remaining participant has acted
      */
     private boolean allActed() {
-        return !players.isEmpty() && players.values().stream().allMatch(player -> player.user.isSubmitted());
+        return !players.isEmpty() && players.values().stream().allMatch(player -> player.isSubmitted());
     }
 
     /** Cancel the active deadline before a reset or phase/turn replacement. */
