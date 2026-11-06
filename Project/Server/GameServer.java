@@ -12,8 +12,11 @@ import java.util.TimerTask;
  * disconnects, and deadlines; clients never choose the hidden number or score.
  */
 final class GameServer {
+
     private static final long READY_MS = 30_000L;
+
     private static final long ROUND_MS = 30_000L;
+
     private static final int LAST_ROUND = 3;
 
     /** Private guess data; User retains shared identity, readiness, submitted status, and points. */
@@ -27,13 +30,18 @@ final class GameServer {
     }
 
     private final Timer timer = new Timer(true);
-    private final Map<Long, SessionPlayer> players = new LinkedHashMap<>();
-    private Phase phase = Phase.INACTIVE;
-    private TimerTask activeDeadline;
-    private int roundNumber;
-    private int hiddenNumber;
-    private final java.util.Random random = new java.util.Random();
 
+    private final Map<Long, SessionPlayer> players = new LinkedHashMap<>();
+
+    private Phase phase = Phase.INACTIVE;
+
+    private TimerTask activeDeadline;
+
+    private int roundNumber;
+
+    private int hiddenNumber;
+
+    private final java.util.Random random = new java.util.Random();
 
     /** Apply a READY request forwarded by Server. The first accepted player starts the timed ready window.
      *
@@ -128,6 +136,14 @@ final class GameServer {
         }
     }
 
+    /** Begin a three-round session after readiness closes; clear prior points and open round one. */
+    private void onSessionStart() {
+        roundNumber = 0;
+        for (SessionPlayer player : players.values()) {
+            player.user.setPoints(0);
+        }
+        onRoundStart();
+    }
 
     /** Update game state after Server removes a participant; advance or reset when needed.
      *
@@ -171,15 +187,6 @@ final class GameServer {
                 Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendGuessConfirmation(player.guess));
             }
         }
-    }
-
-    /** Begin a three-round session after readiness closes; clear prior points and open round one. */
-    private void onSessionStart() {
-        roundNumber = 0;
-        for (SessionPlayer player : players.values()) {
-            player.user.setPoints(0);
-        }
-        onRoundStart();
     }
 
     /** Open a simultaneous round with a new hidden number and deadline; keep guesses private. */
