@@ -199,10 +199,11 @@ final class GameServer {
     /** Begin the session after readiness closes; clear prior points and open round one. */
     private void onSessionStart() {
         roundNumber = 0;
+        currentTurnPlayerId = 0;
         for (User player : players.values()) {
             player.setPoints(0);
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(player.getClientId(), player.getPoints()));
         }
-        currentTurnPlayerId = 0;
         // TODO: Replace this temporary secret selection with your project's session setup.
         secret = guessRandom.nextInt(5) + 1;
         onRoundStart();
