@@ -14,9 +14,13 @@ import java.nio.file.Path;
  * disconnects, and deadlines; clients never choose cell results or points.
  */
 final class GameServer {
+
     private static final long READY_MS = 30_000L;
+
     private static final long TURN_MS = 30_000L;
+
     private static final int LAST_ROUND = 3;
+
     private static final int HAND_SIZE = 3;
 
     /** Retains a participant User while connection ownership stays in Server. */
@@ -30,15 +34,22 @@ final class GameServer {
     }
 
     private final Timer timer = new Timer(true);
-    private final Map<Long, SessionPlayer> players = new LinkedHashMap<>();
-    private Phase phase = Phase.INACTIVE;
-    private TimerTask activeDeadline;
-    private int roundNumber;
-    private Grid grid;
-    private long gridSeed;
-    private Deck deck;
-    private long currentTurnPlayerId;
 
+    private final Map<Long, SessionPlayer> players = new LinkedHashMap<>();
+
+    private Phase phase = Phase.INACTIVE;
+
+    private TimerTask activeDeadline;
+
+    private int roundNumber;
+
+    private Grid grid;
+
+    private long gridSeed;
+
+    private Deck deck;
+
+    private long currentTurnPlayerId;
 
     /** Apply a READY request forwarded by Server. The first accepted player starts the timed ready window.
      *
@@ -163,6 +174,26 @@ final class GameServer {
         }
     }
 
+    /** Start a repeatable seeded grid and the first round. */
+    private void onSessionStart() {
+        roundNumber = 0;
+        for (SessionPlayer player : players.values()) {
+            player.user.setPoints(0);
+            player.hand.clear();
+        }
+        try {
+            deck = new Deck(Path.of("Project/Server/cards.txt"));
+        } catch (IOException e) {
+            resetSession("Could not load the example card catalog: " + e.getMessage());
+            return;
+        }
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCatalog(deck.catalog()));
+        gridSeed = System.currentTimeMillis();
+        grid = new Grid(5, 5, gridSeed);
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendGridSeed(grid.getWidth(), grid.getHeight(), gridSeed));
+        currentTurnPlayerId = 0;
+        onRoundStart();
+    }
 
     /** Update game state after Server removes a participant; advance or reset when needed.
      *
@@ -228,27 +259,6 @@ final class GameServer {
                 }
             }
         }
-    }
-
-    /** Start a repeatable seeded grid and the first round. */
-    private void onSessionStart() {
-        roundNumber = 0;
-        for (SessionPlayer player : players.values()) {
-            player.user.setPoints(0);
-            player.hand.clear();
-        }
-        try {
-            deck = new Deck(Path.of("Project/Server/cards.txt"));
-        } catch (IOException e) {
-            resetSession("Could not load the example card catalog: " + e.getMessage());
-            return;
-        }
-        Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCatalog(deck.catalog()));
-        gridSeed = System.currentTimeMillis();
-        grid = new Grid(5, 5, gridSeed);
-        Server.INSTANCE.sendGameAction(recipient -> recipient.sendGridSeed(grid.getWidth(), grid.getHeight(), gridSeed));
-        currentTurnPlayerId = 0;
-        onRoundStart();
     }
 
     /** Open a round in which each participant can make one grid action. */
