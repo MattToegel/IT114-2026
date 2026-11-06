@@ -19,7 +19,6 @@ public class ServerThread extends Thread {
 
     private final java.util.Timer nameTimer = new java.util.Timer(true);
 
-
     private final java.util.function.Consumer<ServerThread> onInitializationComplete;
 
     private volatile ObjectOutputStream out;
@@ -225,6 +224,20 @@ public class ServerThread extends Thread {
         Server.INSTANCE.handleReverseText(this, payload.getMessage() == null ? "" : payload.getMessage());
     }
 
+    /** Interpret this connection's READY payload and pass its intent to Server.handleReady() after registration. */
+    private void processReady() {
+        if (isRegistered()) {
+            Server.INSTANCE.handleReady(this);
+        }
+    }
+
+    /** Interpret this connection's RESET payload and pass its intent to Server.handleReset() after registration. */
+    private void processReset() {
+        if (isRegistered()) {
+            Server.INSTANCE.handleReset(this);
+        }
+    }
+
     /**
      * Called by processPayload() for a USERS request.
      * Passes this connection to Server.handleGetUserList() so only its client
@@ -265,6 +278,32 @@ public class ServerThread extends Thread {
         user = new User(getClientId(), proposed.trim());
         nameTimer.cancel();
         onInitialized();
+    }
+
+    /**
+     * Bundle GameServer's public phase for this recipient.
+     * @param phase the authoritative session phase
+     * @return true after a local write, not client acknowledgment
+     */
+    protected boolean sendGamePhase(Phase phase) {
+        Payload payload = new Payload();
+        payload.setPayloadType(PayloadType.GAME_PHASE_SYNC);
+        payload.setMessage(phase.name());
+        return sendToClient(payload);
+    }
+
+    /**
+     * Bundle one participant's public readiness for this recipient.
+     * @param clientId the participant whose status changed
+     * @param ready whether that participant is ready
+     * @return true after a local write, not client acknowledgment
+     */
+    protected boolean sendReadyStatus(long clientId, boolean ready) {
+        BoolPayload payload = new BoolPayload();
+        payload.setPayloadType(PayloadType.PLAYER_READY_STATUS);
+        payload.setClientId(clientId);
+        payload.setValue(ready);
+        return sendToClient(payload);
     }
 
     /**
@@ -403,47 +442,7 @@ public class ServerThread extends Thread {
         }
     }
 
-    /** Interpret this connection's READY payload and pass its intent to Server.handleReady() after registration. */
-    private void processReady() {
-        if (isRegistered()) {
-            Server.INSTANCE.handleReady(this);
-        }
-    }
-
-    /** Interpret this connection's RESET payload and pass its intent to Server.handleReset() after registration. */
-    private void processReset() {
-        if (isRegistered()) {
-            Server.INSTANCE.handleReset(this);
-        }
-    }
-
-        /**
-     * Bundle GameServer's public phase for this recipient.
-     * @param phase the authoritative session phase
-     * @return true after a local write, not client acknowledgment
-     */
-    protected boolean sendGamePhase(Phase phase) {
-        Payload payload = new Payload();
-        payload.setPayloadType(PayloadType.GAME_PHASE_SYNC);
-        payload.setMessage(phase.name());
-        return sendToClient(payload);
-    }
-
-        /**
-     * Bundle one participant's public readiness for this recipient.
-     * @param clientId the participant whose status changed
-     * @param ready whether that participant is ready
-     * @return true after a local write, not client acknowledgment
-     */
-    protected boolean sendReadyStatus(long clientId, boolean ready) {
-        BoolPayload payload = new BoolPayload();
-        payload.setPayloadType(PayloadType.PLAYER_READY_STATUS);
-        payload.setClientId(clientId);
-        payload.setValue(ready);
-        return sendToClient(payload);
-    }
-
-        /**
+    /**
      * Interpret this connection's typed GUESS payload before passing its number to Server.handleGuess().
      * @param payload the received numeric request
      */
@@ -453,8 +452,7 @@ public class ServerThread extends Thread {
         }
     }
 
-
-        /**
+    /**
      * Bundle public action status for this recipient, never a private guess.
      * @param clientId the participant
      * @param guessed whether that participant acted
@@ -468,7 +466,7 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-        /**
+    /**
      * Bundle a private confirmation on the submitting client's connection.
      * @param guess the submitted number
      * @return true after a local write, not client acknowledgment
@@ -480,7 +478,7 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-        /**
+    /**
      * Bundle GameServer-owned public points for this recipient.
      * @param clientId the scored participant
      * @param points the authoritative total
@@ -494,7 +492,7 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-        /**
+    /**
      * Bundle the authoritative public round number for this recipient.
      * @param round the current round
      * @return true after a local write, not client acknowledgment
