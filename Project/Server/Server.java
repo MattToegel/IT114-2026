@@ -205,6 +205,17 @@ public enum Server {
         }
     }
 
+    /** Forward a registered client's typed GUESS request; GameServer validates its turn rules. */
+    protected synchronized void handleGuess(ServerThread sender, int guess) {
+        if (connectedClients.get(sender.getClientId()) == sender) {
+            try {
+                gameServer.handleGuess(sender.getUser(), guess);
+            } finally {
+                processDisconnectedBuffer();
+            }
+        }
+    }
+
     /**
      * Handles a /users request from ServerThread.processGetUserList().
      * Reuses the initial-sync path to send a current snapshot only to the requester.
@@ -339,14 +350,4 @@ public enum Server {
         Server.INSTANCE.start(port);
     }
 
-    /** Forward a registered client's typed GUESS request; GameServer validates its turn rules. */
-    protected synchronized void handleGuess(ServerThread sender, int guess) {
-        if (connectedClients.get(sender.getClientId()) == sender) {
-            try {
-                gameServer.handleGuess(sender.getUser(), guess);
-            } finally {
-                processDisconnectedBuffer();
-            }
-        }
-    }
 }

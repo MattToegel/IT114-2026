@@ -191,6 +191,18 @@ public enum Client {
     }
 
     /**
+     * Send a typed guess; GameServer validates phase and participant eligibility.
+     * @param value the requested number from 1 through 10
+     * @throws IOException if the guess cannot be written to the server
+     */
+    private void sendGuess(int value) throws IOException {
+        IntPayload payload = new IntPayload();
+        payload.setPayloadType(PayloadType.GUESS);
+        payload.setValue(value);
+        sendToServer(payload);
+    }
+
+    /**
      * Called during connection setup after both object streams are ready.
      * Bundles the chosen name as CLIENT_CONNECT so the server can register this client.
      *
@@ -505,17 +517,6 @@ public enum Client {
         Client.INSTANCE.start();
     }
 
-    /**
-     * Send a typed guess; GameServer validates phase and participant eligibility.
-     * @param value the requested number from 1 through 10
-     * @throws IOException if the guess cannot be written to the server
-     */
-    private void sendGuess(int value) throws IOException {
-        IntPayload payload = new IntPayload();
-        payload.setPayloadType(PayloadType.GUESS);
-        payload.setValue(value);
-        sendToServer(payload);
-    }
 
     /**
      * Display only this client's privately confirmed guess.

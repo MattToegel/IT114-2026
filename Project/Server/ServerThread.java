@@ -239,6 +239,16 @@ public class ServerThread extends Thread {
     }
 
     /**
+     * Interpret this connection's typed GUESS payload before passing its number to Server.handleGuess().
+     * @param payload the received numeric request
+     */
+    private void processGuess(IntPayload payload) {
+        if (isRegistered()) {
+            Server.INSTANCE.handleGuess(this, payload.getValue());
+        }
+    }
+
+    /**
      * Called by processPayload() for a USERS request.
      * Passes this connection to Server.handleGetUserList() so only its client
      * receives the requested snapshot.
@@ -456,15 +466,6 @@ public class ServerThread extends Thread {
         }
     }
 
-    /**
-     * Interpret this connection's typed GUESS payload before passing its number to Server.handleGuess().
-     * @param payload the received numeric request
-     */
-    private void processGuess(IntPayload payload) {
-        if (isRegistered()) {
-            Server.INSTANCE.handleGuess(this, payload.getValue());
-        }
-    }
 
     /**
      * Bundle public action status for this recipient, never a private guess.
