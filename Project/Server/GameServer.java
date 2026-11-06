@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.Random;
 
 /**
  * Owns the small ready-check session. All methods run while holding Server's
@@ -19,7 +20,7 @@ final class GameServer {
     private final Map<Long, User> players = new LinkedHashMap<>();
 
     // TODO: Remove the random generator and secret when implementing your project game.
-    private final java.util.Random guessRandom = new java.util.Random();
+    private final Random guessRandom = new Random();
 
     // TODO: Remove this temporary guessing-game field when implementing your project game.
     private int secret;
