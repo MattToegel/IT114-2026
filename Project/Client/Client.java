@@ -372,6 +372,19 @@ public enum Client {
     }
 
     /**
+     * Apply a GameServer-owned public score to the local User.
+     * @param payload the participant ID and authoritative total
+     */
+    private void processPoints(IntPayload payload) {
+        User user = knownUsers.get(payload.getClientId());
+        if (user != null) {
+            user.setPoints(payload.getValue());
+            LoggerUtil.INSTANCE.info(user.getDisplayName()
+                    + " points: " + user.getPoints());
+        }
+    }
+
+    /**
      * Called by processPayload() for SERVER_SYNC.
      * Adds the server's existing-user snapshot to the local map; later join and
      * leave events keep that map current.
@@ -525,19 +538,6 @@ public enum Client {
             user.setSubmitted(payload.getValue());
             LoggerUtil.INSTANCE.info(user.getDisplayName()
                     + (user.isSubmitted() ? " submitted" : " not submitted"));
-        }
-    }
-
-    /**
-     * Apply a GameServer-owned public score to the local User.
-     * @param payload the participant ID and authoritative total
-     */
-    private void processPoints(IntPayload payload) {
-        User user = knownUsers.get(payload.getClientId());
-        if (user != null) {
-            user.setPoints(payload.getValue());
-            LoggerUtil.INSTANCE.info(user.getDisplayName()
-                    + " points: " + user.getPoints());
         }
     }
 
