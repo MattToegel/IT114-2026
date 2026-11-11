@@ -142,6 +142,7 @@ public enum Client {
                 StringBuilder builder = new StringBuilder("Known clients:\n");
                 knownUsers.values().forEach(user -> builder.append(
                         user.getDisplayName() + (user.isReady() ? " [ready]" : " [not ready]")
+                                + (user.isMyTurn() ? " [current turn]" : "")
                                 + (user.isSubmitted() ? " [submitted]" : " [not submitted]")
                                 + " points: " + user.getPoints() + "\n"));
                 LoggerUtil.INSTANCE.info(builder.toString());
@@ -557,10 +558,14 @@ public enum Client {
     }
 
     /**
-     * Display the public turn owner, or zero between turns.
+     * Apply the public turn owner to each known User for terminal and UI display.
+     * An owner ID of zero clears every flag; GameServer still validates actions.
      * @param payload the owner ID selected by GameServer
      */
     private void processCurrentTurn(Payload payload) {
+        for (User user : knownUsers.values()) {
+            user.setMyTurn(user.getClientId() == payload.getClientId());
+        }
         LoggerUtil.INSTANCE.info("Current turn: " + payload.getClientId());
     }
 }

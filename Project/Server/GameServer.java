@@ -219,6 +219,7 @@ final class GameServer {
         }
         client.setGuess(0);
         client.setReady(false);
+        client.setMyTurn(false);
         client.setSubmitted(false);
         client.setPoints(0);
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendReadyStatus(client.getClientId(), false));
@@ -278,6 +279,9 @@ final class GameServer {
                 .filter(entry -> !entry.getValue().isSubmitted())
                 .mapToLong(Map.Entry::getKey)
                 .min().orElse(0);
+        for (User player : players.values()) {
+            player.setMyTurn(player.getClientId() == currentTurnPlayerId);
+        }
         if (currentTurnPlayerId == 0) {
             onRoundEnd();
             return;
@@ -294,6 +298,10 @@ final class GameServer {
             return;
         }
         cancelDeadline();
+        User current = players.get(currentTurnPlayerId);
+        if (current != null) {
+            current.setMyTurn(false);
+        }
         currentTurnPlayerId = 0;
         if (allGuessed()) {
             onRoundEnd();
@@ -379,6 +387,7 @@ final class GameServer {
         cancelDeadline();
         for (User user : players.values()) {
             user.setReady(false);
+            user.setMyTurn(false);
             user.setSubmitted(false);
             user.setGuess(0);
             user.setPoints(0);

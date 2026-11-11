@@ -10,6 +10,7 @@ public class User implements java.io.Serializable {
     private final String clientName;
     private volatile boolean ready;
     private volatile boolean submitted;
+    private volatile boolean isMyTurn;
     private volatile int points;
     // TODO: Remove the temporary guess and its accessors when implementing your project game.
     // transient omits this field when User is written to an ObjectOutputStream.
@@ -60,6 +61,22 @@ public class User implements java.io.Serializable {
      */
     public void setSubmitted(boolean submitted) {
         this.submitted = submitted;
+    }
+
+    /**
+     * Let a user-list row read the server-selected turn status for this user.
+     * @return true when this user owns the current turn
+     */
+    public boolean isMyTurn() {
+        return isMyTurn;
+    }
+
+    /**
+     * Store GameServer's turn decision or apply its update on the client.
+     * @param myTurn whether this user owns the current turn
+     */
+    public void setMyTurn(boolean myTurn) {
+        isMyTurn = myTurn;
     }
 
         /**
