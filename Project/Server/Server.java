@@ -343,12 +343,12 @@ public enum Server {
      * @param sender the requesting connection
      * @param x the target column
      * @param y the target row
-     * @param modifier the proposed addition
+     * @param cardId the proposed card ID
      */
-    protected synchronized void handleGridAction(ServerThread sender, int x, int y, int modifier) {
+    protected synchronized void handleCardAction(ServerThread sender, int cardId, int x, int y) {
         if (connectedClients.get(sender.getClientId()) == sender) {
             try {
-                gameServer.handleGridAction(sender.getUser(), x, y, modifier);
+                gameServer.handleCardAction(sender.getUser(), cardId, x, y);
             } finally {
                 processDisconnectedBuffer();
             }

@@ -36,12 +36,18 @@ public enum Client {
 
     private Grid grid;
 
+    private java.util.Map<Integer, Card> cardCatalog = new java.util.HashMap<>();
+
+    private java.util.List<Integer> hand = new java.util.ArrayList<>();
+
+    private java.util.Map<Long, Integer> publicHandCounts = new java.util.HashMap<>();
+
     private final java.util.concurrent.ConcurrentHashMap<Long, User> knownUsers = new java.util.concurrent.ConcurrentHashMap<>();
 
     private enum Command {
         CONNECT("/connect"), DISCONNECT("/disconnect"), QUIT("/quit"),
         USERS("/users"), REVERSE("/reverse"), SET_NAME("/name"),
-        READY("/ready"), RESET("/reset"), GRID_TEST("/gridtest"), GRID("/grid");
+        READY("/ready"), RESET("/reset"), CARD("/card"), HAND("/hand"), GRID("/grid");
 
         private final String trigger;
 
@@ -156,18 +162,21 @@ public enum Client {
             case RESET:
                 sendReset();
                 return true;
-            case GRID_TEST:
+            case CARD:
                 String[] values = arguments.trim().split("\s+");
                 if (values.length != 3) {
-                    LoggerUtil.INSTANCE.info("Use /gridtest <x> <y> <value 1-9>");
+                    LoggerUtil.INSTANCE.info("Use /card <cardId> <x> <y>");
                     return true;
                 }
                 try {
-                    sendGridAction(Integer.parseInt(values[0]), Integer.parseInt(values[1]),
+                    sendCardAction(Integer.parseInt(values[0]), Integer.parseInt(values[1]),
                             Integer.parseInt(values[2]));
                 } catch (NumberFormatException e) {
-                    LoggerUtil.INSTANCE.info("Use whole numbers for /gridtest");
+                    LoggerUtil.INSTANCE.info("Use whole numbers for /card");
                 }
+                return true;
+            case HAND:
+                showHand();
                 return true;
             case GRID:
                 showGrid();
@@ -348,6 +357,15 @@ public enum Client {
             case GRID_CELL_SYNC:
                 processGridCell((GridCellPayload) payload);
                 break;
+            case CARD_CATALOG_SYNC:
+                processCardCatalog((CardCatalogPayload) payload);
+                break;
+            case CARD_HAND_SYNC:
+                processCardHand((CardHandPayload) payload);
+                break;
+            case CARD_COUNT_SYNC:
+                processCardCount((IntPayload) payload);
+                break;
             case POINTS:
                 processPoints((IntPayload) payload);
                 break;
@@ -386,9 +404,8 @@ public enum Client {
         }
     }
 
-    /**
-     * Apply a GameServer-owned public score to the local User.
-     * @param payload the participant ID and authoritative total
+    /** Apply a GameServer-owned public score to the local User.
+     * @param payload participant ID and authoritative total
      */
     private void processPoints(IntPayload payload) {
         User user = knownUsers.get(payload.getClientId());
@@ -496,6 +513,9 @@ public enum Client {
             clientId = Constants.DEFAULT_CLIENT_ID;
             knownUsers.clear();
             grid = null;
+            cardCatalog.clear();
+            hand.clear();
+            publicHandCounts.clear();
             LoggerUtil.INSTANCE.info(TextFX.colorize("Disconnected", TextFX.Color.YELLOW));
         }
     }
@@ -525,19 +545,27 @@ public enum Client {
     }
 
     /**
-     * Send a proposed plus-pattern action to GameServer through the endpoint.
+     * Send a proposed card play; only GameServer validates ownership and target.
+     * @param cardId card ID from this client's private hand
      * @param x target column
      * @param y target row
-     * @param modifier addition from 1 through 9
      * @throws IOException when the local write fails
      */
-    private void sendGridAction(int x, int y, int modifier) throws IOException {
-        GridActionPayload payload = new GridActionPayload();
-        payload.setPayloadType(PayloadType.GRID_ACTION);
+    private void sendCardAction(int cardId, int x, int y) throws IOException {
+        CardActionPayload payload = new CardActionPayload();
+        payload.setPayloadType(PayloadType.CARD_ACTION);
+        payload.setCardId(cardId);
         payload.setX(x);
         payload.setY(y);
-        payload.setModifier(modifier);
         sendToServer(payload);
+    }
+
+    /** Display only card IDs received privately on this connection. */
+    private synchronized void showHand() {
+        LoggerUtil.INSTANCE.info("Your hand: " + hand);
+        for (int id : hand) {
+            LoggerUtil.INSTANCE.info(String.valueOf(cardCatalog.get(id)));
+        }
     }
 
     /** Show the latest server-confirmed grid to the terminal user. */
@@ -576,6 +604,36 @@ public enum Client {
         if (grid != null && grid.contains(payload.getX(), payload.getY())) {
             grid.setValue(payload.getX(), payload.getY(), payload.getValue());
         }
+    }
+
+    /** Replace public card definitions; an empty catalog clears counts.
+     * @param payload catalog sent to all clients
+     */
+    private void processCardCatalog(CardCatalogPayload payload) {
+        cardCatalog.clear();
+        if (payload.getCards().isEmpty()) {
+            publicHandCounts.clear();
+        }
+        for (Card card : payload.getCards()) {
+            cardCatalog.put(card.getId(), card);
+        }
+    }
+
+    /** Replace this connection's private hand.
+     * @param payload owner-only card IDs
+     */
+    private void processCardHand(CardHandPayload payload) {
+        hand = new java.util.ArrayList<>(payload.getCardIds());
+        LoggerUtil.INSTANCE.info("Your hand: " + hand);
+    }
+
+    /** Update one public hand size without receiving its card IDs.
+     * @param payload participant ID and card count
+     */
+    private void processCardCount(IntPayload payload) {
+        publicHandCounts.put(payload.getClientId(), payload.getValue());
+        LoggerUtil.INSTANCE.info("Player " + payload.getClientId()
+                + " has " + payload.getValue() + " cards");
     }
 
     /**

@@ -190,8 +190,8 @@ public class ServerThread extends Thread {
             case RESET:
                 processReset();
                 break;
-            case GRID_ACTION:
-                processGridAction((GridActionPayload) payload);
+            case CARD_ACTION:
+                processCardAction((CardActionPayload) payload);
                 break;
             default:
                 info("Unsupported client message: " + payload.getPayloadType());
@@ -457,12 +457,12 @@ public class ServerThread extends Thread {
     }
 
     /**
-     * Pass the target and modifier from this endpoint to Server for game validation.
-     * @param payload the received grid action
+     * Pass this endpoint's card and target values to Server for validation.
+     * @param payload the received card request
      */
-    private void processGridAction(GridActionPayload payload) {
+    private void processCardAction(CardActionPayload payload) {
         if (isRegistered()) {
-            Server.INSTANCE.handleGridAction(this, payload.getX(), payload.getY(), payload.getModifier());
+            Server.INSTANCE.handleCardAction(this, payload.getCardId(), payload.getX(), payload.getY());
         }
     }
 
@@ -509,6 +509,42 @@ public class ServerThread extends Thread {
         payload.setX(x);
         payload.setY(y);
         payload.setValue(value);
+        return sendToClient(payload);
+    }
+
+    /**
+     * Bundle the public card catalog for this recipient.
+     * @param cards current card definitions, or empty on reset
+     * @return true after a local write
+     */
+    protected boolean sendCardCatalog(List<Card> cards) {
+        CardCatalogPayload payload = new CardCatalogPayload(cards);
+        payload.setPayloadType(PayloadType.CARD_CATALOG_SYNC);
+        return sendToClient(payload);
+    }
+
+    /**
+     * Bundle private card IDs only on their owner's connection.
+     * @param cardIds current IDs in this owner's hand
+     * @return true after a local write
+     */
+    protected boolean sendCardHand(List<Integer> cardIds) {
+        CardHandPayload payload = new CardHandPayload(cardIds);
+        payload.setPayloadType(PayloadType.CARD_HAND_SYNC);
+        return sendToClient(payload);
+    }
+
+    /**
+     * Bundle one participant's public hand size without card IDs.
+     * @param clientId the participant
+     * @param count number of cards held
+     * @return true after a local write
+     */
+    protected boolean sendCardCount(long clientId, int count) {
+        IntPayload payload = new IntPayload();
+        payload.setPayloadType(PayloadType.CARD_COUNT_SYNC);
+        payload.setClientId(clientId);
+        payload.setValue(count);
         return sendToClient(payload);
     }
 
