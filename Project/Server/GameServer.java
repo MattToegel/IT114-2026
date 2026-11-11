@@ -48,6 +48,8 @@ final class GameServer {
 
     private Deck deck;
 
+    private long deadlineAtMillis;
+
     private long currentTurnPlayerId;
 
     /**
@@ -273,6 +275,7 @@ final class GameServer {
      */
     void syncTo(long recipientId) {
         Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendGamePhase(phase));
+        Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendTimerSync(remainingMillis()));
         if (roundNumber > 0) {
             Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendRound(roundNumber));
         }
@@ -434,6 +437,8 @@ final class GameServer {
         roundNumber = 0;
         grid = null;
         gridSeed = 0;
+        deadlineAtMillis = 0;
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendTimerSync(0));
         deck = null;
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCatalog(List.of()));
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendGridSeed(0, 0, 0));
@@ -461,6 +466,17 @@ final class GameServer {
         }
     }
 
+    /** Return a bounded approximate countdown for a newcomer; expiry stays server-owned.
+     * @return remaining milliseconds, or zero without a deadline
+     */
+    private int remainingMillis() {
+        if (deadlineAtMillis == 0) {
+            return 0;
+        }
+        return (int) Math.min(Integer.MAX_VALUE,
+                Math.max(0, deadlineAtMillis - System.currentTimeMillis()));
+    }
+
     /**
      * Replace the deadline. Its callback holds the same Server lock as client actions
      * and finishes departure cleanup after the game event.
@@ -469,6 +485,8 @@ final class GameServer {
      */
     private void schedule(long delayMs) {
         cancelDeadline();
+        deadlineAtMillis = System.currentTimeMillis() + delayMs;
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendTimerSync((int) Math.min(Integer.MAX_VALUE, delayMs)));
         activeDeadline = new TimerTask() {
             @Override
             public void run() {

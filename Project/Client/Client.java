@@ -44,6 +44,16 @@ public enum Client {
 
     private final java.util.concurrent.ConcurrentHashMap<Long, User> knownUsers = new java.util.concurrent.ConcurrentHashMap<>();
 
+    private String phase = "INACTIVE";
+
+    private int round;
+
+    private long currentTurnId;
+
+    private long timerDeadlineNanos;
+
+    private volatile ClientListener listener;
+
     private enum Command {
         CONNECT("/connect"), DISCONNECT("/disconnect"), QUIT("/quit"),
         USERS("/users"), REVERSE("/reverse"), SET_NAME("/name"),
@@ -70,6 +80,154 @@ public enum Client {
     /** Check whether the current socket and output stream are available. */
     public synchronized boolean isConnected() {
         return server != null && !server.isClosed() && out != null;
+    }
+
+    /**
+     * Use the terminal socket path for a Swing connection after validating its endpoint.
+     * @param name chosen player name
+     * @param host server hostname
+     * @param port server port
+     * @return true when the local connection request was sent
+     * @throws IOException if the name request cannot be written
+     */
+    public synchronized boolean connectToServer(String name, String host, int port) throws IOException {
+        if (isConnected() || name == null || name.isBlank()
+                || host == null || host.isBlank() || port < 1 || port > 65535) {
+            return false;
+        }
+        clientName = name.trim();
+        if (!connect(host.trim(), port)) {
+            return false;
+        }
+        try {
+            sendConnectionData();
+            publishState();
+            return true;
+        } catch (IOException e) {
+            closeServerConnection(server);
+            throw e;
+        }
+    }
+
+    /** Process a Swing chat entry through the same parser as terminal input.
+     * @param text chat or slash command
+     * @throws IOException when a local write fails
+     */
+    public void sendChat(String text) throws IOException {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        if (!processClientCommand(text)) {
+            sendMessage(text);
+        }
+    }
+
+    /** Send the Swing view's readiness intent.
+     * @throws IOException when the local write fails
+     */
+    public void requestReady() throws IOException {
+        sendReady();
+    }
+
+    /** Send the Swing view's reset intent.
+     * @throws IOException when the local write fails
+     */
+    public void requestReset() throws IOException {
+        sendReset();
+    }
+
+    /** Send a card play through the same endpoint as terminal input.
+     * @param cardId private hand ID
+     * @param x target column
+     * @param y target row
+     * @throws IOException when the local write fails
+     */
+    public void playCard(int cardId, int x, int y) throws IOException {
+        sendCardAction(cardId, x, y);
+    }
+
+    /** Close only this client's current socket; Server observes its departure. */
+    public synchronized void disconnectClient() {
+        closeServerConnection(server);
+    }
+
+    /** Register one view observer and send it the current snapshot.
+     * @param observer the active view
+     */
+    public synchronized void attachListener(ClientListener observer) {
+        listener = java.util.Objects.requireNonNull(observer);
+        observer.onState(snapshot());
+    }
+
+    /** Let only the current observer detach itself.
+     * @param observer the view requesting detachment
+     * @return true when this view was still active
+     */
+    public synchronized boolean detachListener(ClientListener observer) {
+        if (listener != observer) {
+            return false;
+        }
+        listener = null;
+        return true;
+    }
+
+    /** Capture the current socket so delayed view cleanup cannot close a later connection.
+     * @param observer the view being closed
+     * @return a socket-specific close action, or a no-op for an old view
+     */
+    public synchronized Runnable detachListenerForClose(ClientListener observer) {
+        if (listener != observer) {
+            return () -> {};
+        }
+        listener = null;
+        Socket connection = server;
+        return () -> closeServerConnection(connection);
+    }
+
+    /** Copy synchronized ordinary values for Swing without exposing network payloads.
+     * @return an immutable current view snapshot
+     */
+    public synchronized ClientSnapshot snapshot() {
+        java.util.List<ClientSnapshot.Player> players = new java.util.ArrayList<>();
+        knownUsers.values().stream()
+                .sorted(java.util.Comparator.comparingLong(User::getClientId))
+                .forEach(user -> players.add(new ClientSnapshot.Player(
+                        user.getClientId(), user.getDisplayName(),
+                        user.isReady(), user.isSubmitted(), user.isMyTurn(), user.getPoints(),
+                        publicHandCounts.getOrDefault(user.getClientId(), 0))));
+        java.util.List<java.util.List<Integer>> cells = new java.util.ArrayList<>();
+        if (grid != null) {
+            for (int y = 0; y < grid.getHeight(); y++) {
+                java.util.List<Integer> row = new java.util.ArrayList<>();
+                for (int x = 0; x < grid.getWidth(); x++) {
+                    row.add(grid.getValue(x, y));
+                }
+                cells.add(row);
+            }
+        }
+        long remaining = timerDeadlineNanos == 0 ? 0
+                : Math.max(0, (timerDeadlineNanos - System.nanoTime()) / 1_000_000);
+        return new ClientSnapshot(isConnected(), clientId, phase, round, currentTurnId,
+                (int) Math.min(Integer.MAX_VALUE, remaining), players, cells,
+                new java.util.ArrayList<>(cardCatalog.values()), hand);
+    }
+
+    /** Notify the active view after a state-changing endpoint message. */
+    private void publishState() {
+        ClientListener observer = listener;
+        if (observer != null) {
+            observer.onState(snapshot());
+        }
+    }
+
+    /** Show ordinary chat and game notices in the active view.
+     * @param message display text
+     */
+    private void publishMessage(String message) {
+        ClientListener observer = listener;
+        if (observer != null && message != null) {
+            observer.onMessage(message);
+        }
     }
 
     /** Open streams in header-safe order and start a background receiver. */
@@ -316,7 +474,8 @@ public enum Client {
 
     /** Route each incoming payload to its matching process method. */
     private void processPayload(Payload payload) {
-        if (Constants.LOG_PAYLOADS) {
+        if (Constants.LOG_PAYLOADS && payload != null
+                && payload.getPayloadType() != PayloadType.TIMER_SYNC) {
             LoggerUtil.INSTANCE.info(payload);
         }
         if (payload == null || payload.getPayloadType() == null) {
@@ -366,6 +525,9 @@ public enum Client {
             case CARD_COUNT_SYNC:
                 processCardCount((IntPayload) payload);
                 break;
+            case TIMER_SYNC:
+                processTimerSync((IntPayload) payload);
+                break;
             case POINTS:
                 processPoints((IntPayload) payload);
                 break;
@@ -381,6 +543,10 @@ public enum Client {
             default:
                 break;
         }
+        if (payload.getPayloadType() != PayloadType.MESSAGE
+                && payload.getPayloadType() != PayloadType.DISCONNECT) {
+            publishState();
+        }
     }
 
     /**
@@ -388,6 +554,7 @@ public enum Client {
      * @param payload the public phase update
      */
     private void processGamePhase(Payload payload) {
+        phase = payload.getMessage();
         LoggerUtil.INSTANCE.info("Game phase: " + payload.getMessage());
     }
 
@@ -463,6 +630,7 @@ public enum Client {
     private void processServerLeave(Payload payload) {
         User user = knownUsers.remove(payload.getClientId());
         if (user != null) {
+            publicHandCounts.remove(user.getClientId());
             LoggerUtil.INSTANCE.info(TextFX.colorize(user.getDisplayName() + " left", TextFX.Color.YELLOW));
         }
     }
@@ -473,6 +641,7 @@ public enum Client {
      */
     private void processReverse(Payload payload) {
         LoggerUtil.INSTANCE.info(TextFX.colorize(payload.getMessage(), TextFX.Color.CYAN));
+        publishMessage(payload.getMessage());
     }
 
     /**
@@ -487,12 +656,19 @@ public enum Client {
             message = TextFX.colorize(message, TextFX.Color.CYAN);
         }
         LoggerUtil.INSTANCE.info(message);
+        publishMessage(payload.getMessage());
     }
 
-    /**
-     * Called by processPayload() if the server sends a DISCONNECT response.
-     * Closes this connection while leaving keyboard input available for reconnect.
+    /** Store approximate remaining time for display; only Server expires turns.
+     * @param payload nonnegative remaining milliseconds
      */
+    private void processTimerSync(IntPayload payload) {
+        int milliseconds = Math.max(0, payload.getValue());
+        timerDeadlineNanos = milliseconds == 0 ? 0
+                : System.nanoTime() + milliseconds * 1_000_000L;
+    }
+
+    /** Handle a server disconnect response while leaving keyboard input available. */
     private void processDisconnect() {
         closeServerConnection(server);
     }
@@ -516,7 +692,12 @@ public enum Client {
             cardCatalog.clear();
             hand.clear();
             publicHandCounts.clear();
+            phase = "INACTIVE";
+            round = 0;
+            currentTurnId = 0;
+            timerDeadlineNanos = 0;
             LoggerUtil.INSTANCE.info(TextFX.colorize("Disconnected", TextFX.Color.YELLOW));
+            publishState();
         }
     }
 
@@ -641,6 +822,7 @@ public enum Client {
      * @param payload the authoritative current round
      */
     private void processRound(IntPayload payload) {
+        round = payload.getValue();
         LoggerUtil.INSTANCE.info("Round " + payload.getValue());
     }
 
@@ -650,6 +832,7 @@ public enum Client {
      * @param payload the owner ID selected by GameServer
      */
     private void processCurrentTurn(Payload payload) {
+        currentTurnId = payload.getClientId();
         for (User user : knownUsers.values()) {
             user.setMyTurn(user.getClientId() == payload.getClientId());
         }

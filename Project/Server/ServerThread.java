@@ -549,6 +549,19 @@ public class ServerThread extends Thread {
     }
 
     /**
+     * Bundle an approximate countdown for one recipient's display.
+     * GameServer alone decides when its TimerTask expires.
+     * @param milliseconds remaining time, or zero after reset
+     * @return true after a local write
+     */
+    protected boolean sendTimerSync(int milliseconds) {
+        IntPayload payload = new IntPayload();
+        payload.setPayloadType(PayloadType.TIMER_SYNC);
+        payload.setValue(milliseconds);
+        return sendToClient(payload);
+    }
+
+    /**
      * Bundle the authoritative public round number for this recipient.
      * @param round the current round
      * @return true after a local write, not client acknowledgment

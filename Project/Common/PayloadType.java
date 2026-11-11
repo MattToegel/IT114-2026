@@ -27,5 +27,6 @@ public enum PayloadType {
     CARD_ACTION,
     CARD_CATALOG_SYNC,
     CARD_HAND_SYNC,
-    CARD_COUNT_SYNC
+    CARD_COUNT_SYNC,
+    TIMER_SYNC
 }

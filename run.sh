@@ -9,7 +9,8 @@ fi
 case "$mode" in
     client) entry="Client.Client" ;;
     server) entry="Server.Server" ;;
-    *) echo "Use client or server"; exit 1 ;;
+    ui) entry="Client.ClientUI" ;;
+    *) echo "Use client, server, or ui"; exit 1 ;;
 esac
 namespace="${project//\//.}"
 java "$namespace.$entry" "${@:3}"
