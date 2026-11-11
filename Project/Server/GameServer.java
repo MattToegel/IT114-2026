@@ -5,19 +5,17 @@ import Project.Exceptions.IT114CustomException;
 import Project.Exceptions.SessionNotInProgressException;
 import Project.Exceptions.NotParticipantException;
 import Project.Exceptions.AlreadySubmittedException;
-import Project.Exceptions.InvalidGuessException;
 import Project.Exceptions.NotYourTurnException;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
-import java.util.Random;
 import java.util.List;
-import java.util.ArrayList;
 
 /**
- * Owns the small ready-check session. All methods run while holding Server's
- * monitor, including timer callbacks, so a request cannot race a deadline.
+ * Owns a three-round grid game. Server's monitor serializes requests,
+ * disconnects, and deadlines; clients never choose cell results or points.
  */
 final class GameServer {
 
@@ -25,21 +23,21 @@ final class GameServer {
 
     private static final long TURN_MS = 30_000L;
 
+    private static final int LAST_ROUND = 3;
+
     private final Timer timer = new Timer(true);
 
     private final Map<Long, User> players = new LinkedHashMap<>();
-
-    // TODO: Remove the random generator and secret when implementing your project game.
-    private final Random guessRandom = new Random();
-
-    // TODO: Remove this temporary guessing-game field when implementing your project game.
-    private int secret;
 
     private Phase phase = Phase.INACTIVE;
 
     private TimerTask activeDeadline;
 
     private int roundNumber;
+
+    private Grid grid;
+
+    private long gridSeed;
 
     private long currentTurnPlayerId;
 
@@ -86,24 +84,12 @@ final class GameServer {
         }
     }
 
-    /**
-     * Reject values outside 1 through 5 before the temporary game records a guess.
-     * @param guess the requested whole number
-     * @throws InvalidGuessException when the value is outside 1 through 5
-     */
-    private void checkGuess(int guess) throws InvalidGuessException {
-        // TODO: Replace this temporary validation with your project's rules.
-        if (guess < 1 || guess > 5) {
-            throw new InvalidGuessException();
-        }
-    }
-
-    /** Apply a READY request forwarded by Server. A newcomer during play waits for the next session.
+    /** Apply a READY request forwarded by Server. The first accepted player starts the timed ready window.
      *
      * @param sender the requesting user
      */
     void handleReady(User sender) {
-        if (phase == Phase.IN_PROGRESS) {
+        if (phase != Phase.INACTIVE && phase != Phase.READY) {
             Server.INSTANCE.sendTo(sender.getClientId(), recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "Wait for the next ready check"));
             return;
         }
@@ -122,36 +108,59 @@ final class GameServer {
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendReadyStatus(sender.getClientId(), true));
     }
 
-    /**
-     * Handle a numeric guess forwarded by Server.handleGuess() under the Server lock.
-     * The current participant submits once; points are awarded when the round is evaluated.
-     *
-     * Failed checks send their specific explanation before any action is recorded.
-     *
-     * @param sender the user who entered /guess
-     * @param guess the requested whole number from 1 through 5
+    /** Apply a target plus pattern only for the current participant and a valid modifier.
+     * @param sender the requesting user
+     * @param x target column
+     * @param y target row
+     * @param modifier addition from 1 through 9
      */
-    void handleGuess(User sender, int guess) {
-        // TODO: Remove this temporary handler when implementing your project game.
+    void handleGridAction(User sender, int x, int y, int modifier) {
+        User player = players.get(sender.getClientId());
         try {
             checkSessionInProgress();
             checkIsParticipant(sender);
             checkNotSubmitted(sender);
             checkTakeTurn(sender);
-            checkGuess(guess);
-
-            sender.setSubmitted(true);
-            sender.setGuess(guess);
-            Server.INSTANCE.sendTo(sender.getClientId(), recipient -> recipient.sendGuessConfirmation(guess));
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendGuessStatus(sender.getClientId(), true));
+            if (grid == null || !grid.contains(x, y) || modifier < 1 || modifier > 9) {
+                sendMessageTo(sender.getClientId(), "Use /gridtest <x> <y> <value 1-9> inside the grid");
+                return;
+            }
+            List<int[]> affected = grid.applyModifier(x, y, modifier);
+            for (int[] position : affected) {
+                sendGridCell(position[0], position[1]);
+            }
+            int gained = grid.countOdd(affected);
+            player.setPoints(player.getPoints() + gained);
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(sender.getClientId(), player.getPoints()));
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID,
+                    sender.getDisplayName() + " changed the plus pattern at (" + x + ", " + y
+                    + ") and gained " + gained + " points"));
+            player.setSubmitted(true);
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(sender.getClientId(), true));
             onTurnEnd();
         } catch (IT114CustomException exception) {
-            Server.INSTANCE.sendTo(sender.getClientId(), recipient -> recipient.sendMessage(
-                    Constants.DEFAULT_CLIENT_ID, exception.getMessage()));
+            sendMessageTo(sender.getClientId(), exception.getMessage());
         }
     }
 
-    /** Apply a RESET request forwarded by Server; only an active participant may restart readiness.
+    /** Send an ordinary rejection only to its requester.
+     * @param recipientId the requester
+     * @param message explanation text
+     */
+    private void sendMessageTo(long recipientId, String message) {
+        Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, message));
+    }
+
+    /** Broadcast a confirmed cell after GameServer changes its authoritative grid.
+     * @param x column
+     * @param y row
+     */
+    private void sendGridCell(int x, int y) {
+        int value = grid.getValue(x, y);
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendGridCell(x, y, value));
+    }
+
+    /** Apply a RESET request forwarded by Server; only an active participant may clear the session.
      *
      * @param sender the requesting user
      */
@@ -162,7 +171,6 @@ final class GameServer {
         }
         resetSession("Session reset; type /ready to join again");
     }
-
 
     /**
      * Advance the current phase when its active deadline fires. A canceled callback
@@ -196,16 +204,17 @@ final class GameServer {
         }
     }
 
-    /** Begin the session after readiness closes; clear prior points and open round one. */
+    /** Start a repeatable seeded grid and the first round. */
     private void onSessionStart() {
         roundNumber = 0;
-        currentTurnPlayerId = 0;
         for (User player : players.values()) {
             player.setPoints(0);
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(player.getClientId(), player.getPoints()));
         }
-        // TODO: Replace this temporary secret selection with your project's session setup.
-        secret = guessRandom.nextInt(5) + 1;
+        gridSeed = System.currentTimeMillis();
+        grid = new Grid(5, 5, gridSeed);
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendGridSeed(grid.getWidth(), grid.getHeight(), gridSeed));
+        currentTurnPlayerId = 0;
         onRoundStart();
     }
 
@@ -217,7 +226,6 @@ final class GameServer {
         if (players.remove(client.getClientId()) == null) {
             return;
         }
-        client.setGuess(0);
         client.setReady(false);
         client.setMyTurn(false);
         client.setSubmitted(false);
@@ -228,19 +236,14 @@ final class GameServer {
         } else if (phase == Phase.IN_PROGRESS) {
             if (client.getClientId() == currentTurnPlayerId) {
                 onTurnEnd();
-            } else if (allGuessed()) {
+            } else if (allActed()) {
                 onRoundEnd();
             }
         }
     }
 
-    /** Replay round and public state; only its owner receives a submitted guess.
-     *
-     * Uses the same ServerThread send methods as live updates to catch this one
-     * client up with authoritative state. Sync selects current values and recipients.
-     * Send methods bundle those values for transmission.
-     *
-     * @param recipientId the newly registered connection
+    /** Sync authoritative public phase, scores, board, and turn to one newcomer.
+     * @param recipientId the joining connection
      */
     void syncTo(long recipientId) {
         Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendGamePhase(phase));
@@ -248,28 +251,38 @@ final class GameServer {
             Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendRound(roundNumber));
         }
         Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendCurrentTurn(currentTurnPlayerId));
-        for (long id : players.keySet()) {
+        for (Map.Entry<Long, User> entry : players.entrySet()) {
+            long id = entry.getKey();
+            User player = entry.getValue();
             Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendReadyStatus(id, true));
-            Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendGuessStatus(id, players.get(id).isSubmitted()));
-            Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendPoints(id, players.get(id).getPoints()));
-            if (id == recipientId && players.get(id).isSubmitted()) {
-                Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendGuessConfirmation(players.get(id).getGuess()));
+            Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendTurnStatus(id, player.isSubmitted()));
+            Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendPoints(id, player.getPoints()));
+        }
+        if (grid != null) {
+            Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendGridSeed(grid.getWidth(), grid.getHeight(), gridSeed));
+            for (int y = 0; y < grid.getHeight(); y++) {
+                for (int x = 0; x < grid.getWidth(); x++) {
+                    int cellX = x;
+                    int cellY = y;
+                    int cellValue = grid.getValue(x, y);
+                    Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendGridCell(cellX, cellY, cellValue));
+                }
             }
         }
     }
 
-    /** Open an individual round while retaining the current secret and starting the first turn. */
+    /** Open a round in which each participant can make one grid action. */
     private void onRoundStart() {
         roundNumber++;
         for (Map.Entry<Long, User> entry : players.entrySet()) {
             entry.getValue().setSubmitted(false);
-            entry.getValue().setGuess(0);
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendGuessStatus(entry.getKey(), false));
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(entry.getKey(), false));
         }
         phase = Phase.IN_PROGRESS;
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendGamePhase(phase));
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendRound(roundNumber));
-        Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "Use /guess <value> with a number from 1 to 5"));
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID,
+                "On your turn use /gridtest <x> <y> <value 1-9>"));
         onTurnStart();
     }
 
@@ -288,7 +301,7 @@ final class GameServer {
         }
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendCurrentTurn(currentTurnPlayerId));
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, players.get(currentTurnPlayerId).getDisplayName()
-                + " has " + ((TURN_MS + 999) / 1000) + " seconds to /guess <value> from 1 to 5"));
+                + " has " + ((TURN_MS + 999) / 1000) + " seconds to /gridtest <x> <y> <value 1-9>"));
         schedule(TURN_MS);
     }
 
@@ -303,25 +316,24 @@ final class GameServer {
             current.setMyTurn(false);
         }
         currentTurnPlayerId = 0;
-        if (allGuessed()) {
+        if (allActed()) {
             onRoundEnd();
         } else {
             onTurnStart();
         }
     }
 
-    /** Mark the owner as acted without a guess or point, then advance the turn. */
+    /** Mark the owner as acted without a board change or point, then advance the turn. */
     private void onTurnTimeout() {
         User player = players.get(currentTurnPlayerId);
         if (player != null) {
             player.setSubmitted(true);
-            player.setGuess(0);
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendGuessStatus(currentTurnPlayerId, true));
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(currentTurnPlayerId, true));
         }
         onTurnEnd();
     }
 
-    /** Evaluate each round once, retain an unsolved secret, and advance or finish the session. */
+    /** Finish a round; points were already awarded with each valid action. */
     private void onRoundEnd() {
         if (phase != Phase.IN_PROGRESS) {
             return;
@@ -331,40 +343,16 @@ final class GameServer {
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendCurrentTurn(0));
         phase = Phase.EVALUATION;
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendGamePhase(phase));
-        boolean hasWinner = false;
-        boolean guessedCorrectly = false;
-        for (Map.Entry<Long, User> entry : players.entrySet()) {
-            User player = entry.getValue();
-            // TODO: Replace this exact-guess scoring rule with your project's scoring rules.
-            if (player.isSubmitted() && player.getGuess() == secret) {
-                player.setPoints(player.getPoints() + 1);
-                guessedCorrectly = true;
-            }
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(entry.getKey(), player.getPoints()));
-            // TODO: Replace the temporary five-point winning condition for your project.
-            if (player.getPoints() >= 5) {
-                hasWinner = true;
-            }
-        }
-        if (guessedCorrectly) {
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(
-                    Constants.DEFAULT_CLIENT_ID, "The number was " + secret));
-        } else {
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(
-                    Constants.DEFAULT_CLIENT_ID, "No correct guesses. The secret stays the same"));
-        }
-        if (hasWinner || players.isEmpty()) {
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID,
+                "Round " + roundNumber + " complete"));
+        if (roundNumber >= LAST_ROUND || players.isEmpty()) {
             onSessionEnd();
         } else {
-            if (guessedCorrectly) {
-                // TODO: Replace this temporary secret selection with your project's game rules.
-                secret = guessRandom.nextInt(5) + 1;
-            }
             onRoundStart();
         }
     }
 
-    /** Announce players who reached the score goal, including ties, before clearing the session. */
+    /** Announce the highest public score, including ties, before clearing session points. */
     private void onSessionEnd() {
         if (!players.isEmpty()) {
             int high = players.values().stream().mapToInt(player -> player.getPoints()).max().orElse(0);
@@ -374,30 +362,32 @@ final class GameServer {
                     winners.add(player.getDisplayName());
                 }
             }
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "Winners: " + String.join(", ", winners) + " with " + high + " points"));
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "Highest score: " + high + " by " + String.join(", ", winners)));
         }
         resetSession("Example session finished; type /ready to repeat");
     }
 
-    /** Invalidate old deadlines, clear round state, readiness and points, and broadcast the reset state.
+    /** Invalidate old deadlines, clear game state, and broadcast the public reset.
      *
-     * @param message the reason broadcast to all connected users
+     * @param message the public reset reason
      */
     private void resetSession(String message) {
         cancelDeadline();
-        for (User user : players.values()) {
-            user.setReady(false);
-            user.setMyTurn(false);
-            user.setSubmitted(false);
-            user.setGuess(0);
-            user.setPoints(0);
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendReadyStatus(user.getClientId(), false));
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendGuessStatus(user.getClientId(), false));
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(user.getClientId(), 0));
+        for (User player : players.values()) {
+            player.setReady(false);
+            player.setMyTurn(false);
+            player.setSubmitted(false);
+            player.setPoints(0);
+            long id = player.getClientId();
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendReadyStatus(id, false));
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(id, false));
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(id, 0));
         }
         players.clear();
         roundNumber = 0;
-        secret = 0;
+        grid = null;
+        gridSeed = 0;
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendGridSeed(0, 0, 0));
         currentTurnPlayerId = 0;
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendCurrentTurn(0));
         phase = Phase.INACTIVE;
@@ -410,7 +400,7 @@ final class GameServer {
      *
      * @return true when every remaining participant has acted
      */
-    private boolean allGuessed() {
+    private boolean allActed() {
         return !players.isEmpty() && players.values().stream().allMatch(player -> player.isSubmitted());
     }
 

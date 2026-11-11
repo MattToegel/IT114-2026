@@ -19,11 +19,10 @@ public enum PayloadType {
     PLAYER_READY_STATUS,
     GAME_PHASE_SYNC,
     POINTS,
-    // TODO: Remove GUESS when replacing the temporary guessing game.
-    GUESS,
-    // TODO: Replace these guessing-game responses with your project's action feedback.
-    GUESS_CONFIRM,
-    GUESS_STATUS,
     ROUND_SYNC,
-    CURRENT_TURN
+    CURRENT_TURN,
+    GRID_ACTION,
+    TURN_STATUS,
+    GRID_SEED_SYNC,
+    GRID_CELL_SYNC
 }

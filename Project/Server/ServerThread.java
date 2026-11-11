@@ -190,9 +190,8 @@ public class ServerThread extends Thread {
             case RESET:
                 processReset();
                 break;
-            case GUESS:
-                // TODO: Remove this route when replacing the temporary guessing game.
-                processGuess((IntPayload) payload);
+            case GRID_ACTION:
+                processGridAction((GridActionPayload) payload);
                 break;
             default:
                 info("Unsupported client message: " + payload.getPayloadType());
@@ -236,17 +235,6 @@ public class ServerThread extends Thread {
     private void processReset() {
         if (isRegistered()) {
             Server.INSTANCE.handleReset(this);
-        }
-    }
-
-    /**
-     * Interpret this connection's typed GUESS payload before passing its number to Server.handleGuess().
-     * @param payload the received numeric request
-     */
-    private void processGuess(IntPayload payload) {
-        // TODO: Remove this request handler when replacing the temporary guessing game.
-        if (isRegistered()) {
-            Server.INSTANCE.handleGuess(this, payload.getValue());
         }
     }
 
@@ -468,32 +456,59 @@ public class ServerThread extends Thread {
         }
     }
 
+    /**
+     * Pass the target and modifier from this endpoint to Server for game validation.
+     * @param payload the received grid action
+     */
+    private void processGridAction(GridActionPayload payload) {
+        if (isRegistered()) {
+            Server.INSTANCE.handleGridAction(this, payload.getX(), payload.getY(), payload.getModifier());
+        }
+    }
 
     /**
-     * Bundle public action status for this recipient, never a private guess.
+     * Bundle a public acted flag for one participant.
      * @param clientId the participant
-     * @param guessed whether that participant acted
-     * @return true after a local write, not client acknowledgment
+     * @param acted whether the turn has been used
+     * @return true after a local write
      */
-    protected boolean sendGuessStatus(long clientId, boolean guessed) {
-        // TODO: Replace this guessing-game status with your project's action status.
+    protected boolean sendTurnStatus(long clientId, boolean acted) {
         BoolPayload payload = new BoolPayload();
-        payload.setPayloadType(PayloadType.GUESS_STATUS);
+        payload.setPayloadType(PayloadType.TURN_STATUS);
         payload.setClientId(clientId);
-        payload.setValue(guessed);
+        payload.setValue(acted);
         return sendToClient(payload);
     }
 
     /**
-     * Bundle a private confirmation on the submitting client's connection.
-     * @param guess the submitted number
-     * @return true after a local write, not client acknowledgment
+     * Bundle the board dimensions and seed for this recipient.
+     * @param width board width, or zero for a reset
+     * @param height board height, or zero for a reset
+     * @param seed initial random seed
+     * @return true after a local write
      */
-    protected boolean sendGuessConfirmation(int guess) {
-        // TODO: Replace this guessing-game confirmation with your project's action feedback.
-        IntPayload payload = new IntPayload();
-        payload.setPayloadType(PayloadType.GUESS_CONFIRM);
-        payload.setValue(guess);
+    protected boolean sendGridSeed(int width, int height, long seed) {
+        GridSeedPayload payload = new GridSeedPayload();
+        payload.setPayloadType(PayloadType.GRID_SEED_SYNC);
+        payload.setWidth(width);
+        payload.setHeight(height);
+        payload.setSeed(seed);
+        return sendToClient(payload);
+    }
+
+    /**
+     * Bundle a server-confirmed cell value for this recipient.
+     * @param x column
+     * @param y row
+     * @param value authoritative cell value
+     * @return true after a local write
+     */
+    protected boolean sendGridCell(int x, int y, int value) {
+        GridCellPayload payload = new GridCellPayload();
+        payload.setPayloadType(PayloadType.GRID_CELL_SYNC);
+        payload.setX(x);
+        payload.setY(y);
+        payload.setValue(value);
         return sendToClient(payload);
     }
 

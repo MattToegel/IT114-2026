@@ -34,14 +34,14 @@ public enum Client {
 
     private long clientId = Constants.DEFAULT_CLIENT_ID;
 
+    private Grid grid;
+
     private final java.util.concurrent.ConcurrentHashMap<Long, User> knownUsers = new java.util.concurrent.ConcurrentHashMap<>();
 
     private enum Command {
         CONNECT("/connect"), DISCONNECT("/disconnect"), QUIT("/quit"),
         USERS("/users"), REVERSE("/reverse"), SET_NAME("/name"),
-        READY("/ready"), RESET("/reset"),
-        // TODO: Remove this command when replacing the temporary guessing game.
-        GUESS("/guess");
+        READY("/ready"), RESET("/reset"), GRID_TEST("/gridtest"), GRID("/grid");
 
         private final String trigger;
 
@@ -96,7 +96,7 @@ public enum Client {
         }
     }
 
-    /** Handle slash commands, including /users with the server-confirmed public score. */
+    /** Handle a recognized slash command and leave ordinary chat text to the caller. */
     private boolean processClientCommand(String text) throws IOException {
         String[] parts = text.strip().split("\\s+", 2);
         Command command = Command.fromText(parts[0]);
@@ -156,13 +156,21 @@ public enum Client {
             case RESET:
                 sendReset();
                 return true;
-            case GUESS:
-                // TODO: Remove this command handler when replacing the temporary guessing game.
-                try {
-                    sendGuess(Integer.parseInt(arguments.trim()));
-                } catch (NumberFormatException e) {
-                    LoggerUtil.INSTANCE.info("Use /guess <value>; choose a whole number from 1 to 5");
+            case GRID_TEST:
+                String[] values = arguments.trim().split("\s+");
+                if (values.length != 3) {
+                    LoggerUtil.INSTANCE.info("Use /gridtest <x> <y> <value 1-9>");
+                    return true;
                 }
+                try {
+                    sendGridAction(Integer.parseInt(values[0]), Integer.parseInt(values[1]),
+                            Integer.parseInt(values[2]));
+                } catch (NumberFormatException e) {
+                    LoggerUtil.INSTANCE.info("Use whole numbers for /gridtest");
+                }
+                return true;
+            case GRID:
+                showGrid();
                 return true;
             case DISCONNECT:
                 sendDisconnect();
@@ -192,19 +200,6 @@ public enum Client {
      */
     private void sendReset() throws IOException {
         sendAction(PayloadType.RESET, null);
-    }
-
-    /**
-     * Send a typed guess; GameServer validates phase and participant eligibility.
-     * @param value the requested number from 1 through 5
-     * @throws IOException if the guess cannot be written to the server
-     */
-    private void sendGuess(int value) throws IOException {
-        // TODO: Remove this send method when replacing the temporary guessing game.
-        IntPayload payload = new IntPayload();
-        payload.setPayloadType(PayloadType.GUESS);
-        payload.setValue(value);
-        sendToServer(payload);
     }
 
     /**
@@ -344,11 +339,14 @@ public enum Client {
             case PLAYER_READY_STATUS:
                 processPlayerReadyStatus((BoolPayload) payload);
                 break;
-            case GUESS_CONFIRM:
-                processGuessConfirmation((IntPayload) payload);
+            case TURN_STATUS:
+                processTurnStatus((BoolPayload) payload);
                 break;
-            case GUESS_STATUS:
-                processGuessStatus((BoolPayload) payload);
+            case GRID_SEED_SYNC:
+                processGridSeed((GridSeedPayload) payload);
+                break;
+            case GRID_CELL_SYNC:
+                processGridCell((GridCellPayload) payload);
                 break;
             case POINTS:
                 processPoints((IntPayload) payload);
@@ -497,6 +495,7 @@ public enum Client {
             out = null;
             clientId = Constants.DEFAULT_CLIENT_ID;
             knownUsers.clear();
+            grid = null;
             LoggerUtil.INSTANCE.info(TextFX.colorize("Disconnected", TextFX.Color.YELLOW));
         }
     }
@@ -525,27 +524,57 @@ public enum Client {
         Client.INSTANCE.start();
     }
 
-
     /**
-     * Display only this client's privately confirmed guess.
-     * @param payload the value returned on this owner's connection
+     * Send a proposed plus-pattern action to GameServer through the endpoint.
+     * @param x target column
+     * @param y target row
+     * @param modifier addition from 1 through 9
+     * @throws IOException when the local write fails
      */
-    private void processGuessConfirmation(IntPayload payload) {
-        // TODO: Replace this guessing-game display with your project's action feedback.
-        LoggerUtil.INSTANCE.info("Your guess: " + payload.getValue());
+    private void sendGridAction(int x, int y, int modifier) throws IOException {
+        GridActionPayload payload = new GridActionPayload();
+        payload.setPayloadType(PayloadType.GRID_ACTION);
+        payload.setX(x);
+        payload.setY(y);
+        payload.setModifier(modifier);
+        sendToServer(payload);
     }
 
-    /**
-     * Apply public action status without revealing a guess.
-     * @param payload the participant ID and submitted or timed-out flag
+    /** Show the latest server-confirmed grid to the terminal user. */
+    private synchronized void showGrid() {
+        LoggerUtil.INSTANCE.info(grid == null ? "No active grid" : grid.toString());
+    }
+
+    /** Apply a public acted flag to the local User used by /users.
+     * @param payload participant ID and server-confirmed flag
      */
-    private void processGuessStatus(BoolPayload payload) {
-        // TODO: Replace this guessing-game status with your project's action status.
+    private void processTurnStatus(BoolPayload payload) {
         User user = knownUsers.get(payload.getClientId());
         if (user != null) {
             user.setSubmitted(payload.getValue());
             LoggerUtil.INSTANCE.info(user.getDisplayName()
-                    + (user.isSubmitted() ? " submitted" : " not submitted"));
+                    + (user.isSubmitted() ? " has acted" : " has not acted"));
+        }
+    }
+
+    /** Rebuild the starting board or clear it on reset.
+     * @param payload authoritative dimensions and seed
+     */
+    private void processGridSeed(GridSeedPayload payload) {
+        if (payload.getWidth() == 0 && payload.getHeight() == 0) {
+            grid = null;
+        } else if (payload.getWidth() > 0 && payload.getHeight() > 0
+                && payload.getWidth() <= 100 && payload.getHeight() <= 100) {
+            grid = new Grid(payload.getWidth(), payload.getHeight(), payload.getSeed());
+        }
+    }
+
+    /** Apply one authoritative cell update.
+     * @param payload cell coordinate and value sent by the server
+     */
+    private void processGridCell(GridCellPayload payload) {
+        if (grid != null && grid.contains(payload.getX(), payload.getY())) {
+            grid.setValue(payload.getX(), payload.getY(), payload.getValue());
         }
     }
 
