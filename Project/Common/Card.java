@@ -21,7 +21,7 @@ public class Card implements Serializable {
      */
     public int getId() { return id; }
     /** Read the modifier used for one card or grid action.
-     * @return the server-defined addition from 1 through 9
+     * @return the server-defined addition from -5 through 5
      */
     public int getModifier() { return modifier; }
 
@@ -30,6 +30,6 @@ public class Card implements Serializable {
      */
     @Override
     public String toString() {
-        return "Card " + id + " (+" + modifier + ")";
+        return "Card " + id + " (" + (modifier >= 0 ? "+" : "") + modifier + ")";
     }
 }

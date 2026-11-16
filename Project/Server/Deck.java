@@ -33,7 +33,7 @@ final class Deck {
             try {
                 int id = Integer.parseInt(parts[0].trim());
                 int modifier = Integer.parseInt(parts[1].trim());
-                if (id < 1 || modifier < 1 || modifier > 9 || catalog.containsKey(id)) {
+                if (id < 1 || modifier < -5 || modifier > 5 || catalog.containsKey(id)) {
                     throw new IOException("Invalid card definition: " + trimmed);
                 }
                 catalog.put(id, new Card(id, modifier));

@@ -8,6 +8,11 @@ import java.io.ObjectOutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.Scanner;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 
 
@@ -36,18 +41,18 @@ public enum Client {
 
     private Grid grid;
 
-    private java.util.Map<Integer, Card> cardCatalog = new java.util.HashMap<>();
+    private Map<Integer, Card> cardCatalog = new HashMap<>();
 
-    private java.util.List<Integer> hand = new java.util.ArrayList<>();
+    private List<Integer> hand = new ArrayList<>();
 
-    private java.util.Map<Long, Integer> publicHandCounts = new java.util.HashMap<>();
+    private Map<Long, Integer> publicHandCounts = new HashMap<>();
 
-    private final java.util.concurrent.ConcurrentHashMap<Long, User> knownUsers = new java.util.concurrent.ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, User> knownUsers = new ConcurrentHashMap<>();
 
     private enum Command {
         CONNECT("/connect"), DISCONNECT("/disconnect"), QUIT("/quit"),
         USERS("/users"), REVERSE("/reverse"), SET_NAME("/name"),
-        READY("/ready"), RESET("/reset"), CARD("/card"), HAND("/hand"), GRID("/grid");
+        READY("/ready"), RESET("/reset"), CARD("/card"), HAND("/hand"), SHOW_GRID("/showgrid");
 
         private final String trigger;
 
@@ -178,7 +183,7 @@ public enum Client {
             case HAND:
                 showHand();
                 return true;
-            case GRID:
+            case SHOW_GRID:
                 showGrid();
                 return true;
             case DISCONNECT:
@@ -404,8 +409,9 @@ public enum Client {
         }
     }
 
-    /** Apply a GameServer-owned public score to the local User.
-     * @param payload participant ID and authoritative total
+    /**
+     * Apply a GameServer-owned public score to the local User.
+     * @param payload the participant ID and authoritative total
      */
     private void processPoints(IntPayload payload) {
         User user = knownUsers.get(payload.getClientId());
@@ -539,11 +545,6 @@ public enum Client {
         }
     }
 
-    /** Start the course's terminal client. */
-    public static void main(String[] args) {
-        Client.INSTANCE.start();
-    }
-
     /**
      * Send a proposed card play; only GameServer validates ownership and target.
      * @param cardId card ID from this client's private hand
@@ -623,7 +624,7 @@ public enum Client {
      * @param payload owner-only card IDs
      */
     private void processCardHand(CardHandPayload payload) {
-        hand = new java.util.ArrayList<>(payload.getCardIds());
+        hand = new ArrayList<>(payload.getCardIds());
         LoggerUtil.INSTANCE.info("Your hand: " + hand);
     }
 
@@ -634,6 +635,11 @@ public enum Client {
         publicHandCounts.put(payload.getClientId(), payload.getValue());
         LoggerUtil.INSTANCE.info("Player " + payload.getClientId()
                 + " has " + payload.getValue() + " cards");
+    }
+
+    /** Start the course's terminal client. */
+    public static void main(String[] args) {
+        Client.INSTANCE.start();
     }
 
     /**

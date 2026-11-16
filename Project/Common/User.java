@@ -44,7 +44,7 @@ public class User implements java.io.Serializable {
     }
 
         /**
-     * Report public action completion without exposing a private guess.
+     * Report public action completion without exposing a private hand.
      * @return true after a valid submission or individual-turn timeout
      */
     public boolean isSubmitted() {

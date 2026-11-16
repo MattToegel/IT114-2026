@@ -411,51 +411,6 @@ public class ServerThread extends Thread {
         }
     }
 
-    /** Initialize both object streams, receive this client's data, and always clean up. */
-    @Override
-    public void run() {
-        // Both endpoints send and flush their stream header before waiting for input.
-        try (Socket connection = client) {
-            connection.setSoTimeout(Constants.SETUP_TIMEOUT_MS);
-            try (ObjectOutputStream output = new ObjectOutputStream(connection.getOutputStream())) {
-                out = output;
-                output.flush();
-                try (ObjectInputStream input = new ObjectInputStream(connection.getInputStream())) {
-                    connection.setSoTimeout(0);
-                    isRunning = true;
-                    nameTimer.schedule(new java.util.TimerTask() {
-                        @Override
-                        public void run() {
-                            if (getClientName() == null) {
-                                disconnect();
-                            }
-                        }
-                    }, Constants.SETUP_TIMEOUT_MS);
-                    while (isRunning) {
-                        try {
-                            processPayload((Payload) input.readObject());
-                        } catch (ClassCastException e) {
-                            info("Ignoring an invalid payload");
-                        } catch (ClassNotFoundException e) {
-                            info("Unknown message class: " + e.getMessage());
-                        }
-                    }
-                }
-            }
-        } catch (IOException e) {
-            if (isRunning) {
-                info("Connection ended: " + e.getMessage());
-            } else {
-                info("Connection closed during setup or cleanup");
-            }
-        } finally {
-            disconnect();
-            nameTimer.cancel();
-            // Notify the server after this handler closes its connection.
-            onDisconnected();
-        }
-    }
-
     /**
      * Pass this endpoint's card and target values to Server for validation.
      * @param payload the received card request
@@ -546,6 +501,51 @@ public class ServerThread extends Thread {
         payload.setClientId(clientId);
         payload.setValue(count);
         return sendToClient(payload);
+    }
+
+    /** Initialize both object streams, receive this client's data, and always clean up. */
+    @Override
+    public void run() {
+        // Both endpoints send and flush their stream header before waiting for input.
+        try (Socket connection = client) {
+            connection.setSoTimeout(Constants.SETUP_TIMEOUT_MS);
+            try (ObjectOutputStream output = new ObjectOutputStream(connection.getOutputStream())) {
+                out = output;
+                output.flush();
+                try (ObjectInputStream input = new ObjectInputStream(connection.getInputStream())) {
+                    connection.setSoTimeout(0);
+                    isRunning = true;
+                    nameTimer.schedule(new java.util.TimerTask() {
+                        @Override
+                        public void run() {
+                            if (getClientName() == null) {
+                                disconnect();
+                            }
+                        }
+                    }, Constants.SETUP_TIMEOUT_MS);
+                    while (isRunning) {
+                        try {
+                            processPayload((Payload) input.readObject());
+                        } catch (ClassCastException e) {
+                            info("Ignoring an invalid payload");
+                        } catch (ClassNotFoundException e) {
+                            info("Unknown message class: " + e.getMessage());
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            if (isRunning) {
+                info("Connection ended: " + e.getMessage());
+            } else {
+                info("Connection closed during setup or cleanup");
+            }
+        } finally {
+            disconnect();
+            nameTimer.cancel();
+            // Notify the server after this handler closes its connection.
+            onDisconnected();
+        }
     }
 
     /**
