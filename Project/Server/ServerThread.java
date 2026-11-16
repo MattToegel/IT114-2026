@@ -13,19 +13,19 @@ import java.util.Objects;
 /** Owns one socket, its object streams, read loop, and resource cleanup. */
 public class ServerThread extends Thread {
 
-    private final Socket client;
+private final Socket client;
 
-    private volatile User user = new User(Constants.DEFAULT_CLIENT_ID, null);
+private volatile User user = new User(Constants.DEFAULT_CLIENT_ID, null);
 
-    private final java.util.Timer nameTimer = new java.util.Timer(true);
+private final java.util.Timer nameTimer = new java.util.Timer(true);
 
-    private final java.util.function.Consumer<ServerThread> onInitializationComplete;
+private final java.util.function.Consumer<ServerThread> onInitializationComplete;
 
-    private volatile ObjectOutputStream out;
+private volatile ObjectOutputStream out;
 
-    private volatile boolean isRunning;
+private volatile boolean isRunning;
 
-    /**
+/**
      * Called by Server when accepting a connection; retain its socket and setup callback.
      * @param client the accepted client socket
      * @param onInitializationComplete callback after streams open and a valid name is received
@@ -37,12 +37,12 @@ public class ServerThread extends Thread {
         this.onInitializationComplete = Objects.requireNonNull(onInitializationComplete, "Callback is required");
     }
 
-    /** Report whether this connection has completed setup and remains active. */
+/** Report whether this connection has completed setup and remains active. */
     public boolean isRunning() {
         return isRunning;
     }
 
-    /**
+/**
      * Supplies Server with the ID used to identify this connection in its registry.
      *
      * @return the ID stored in this handler's User record
@@ -51,7 +51,7 @@ public class ServerThread extends Thread {
         return user.getClientId();
     }
 
-    /**
+/**
      * Supplies a display label for Server messages and connection diagnostics.
      *
      * @return the display name from this handler's User record
@@ -60,7 +60,7 @@ public class ServerThread extends Thread {
         return user.getDisplayName();
     }
 
-    /**
+/**
      * Supplies Server with ordinary user data for lists and connection events.
      * This handler has a User record; Server does not need a payload to inspect it.
      *
@@ -70,7 +70,7 @@ public class ServerThread extends Thread {
         return user;
     }
 
-    /**
+/**
      * Called by Server during registration after it chooses a positive ID.
      * Replaces this handler's User record while keeping the accepted name.
      *
@@ -80,7 +80,7 @@ public class ServerThread extends Thread {
         user = new User(value, user.getClientName());
     }
 
-    /**
+/**
      * Provides this connection's accepted name when confirming its identity.
      *
      * @return the name stored in this handler's User record
@@ -89,7 +89,7 @@ public class ServerThread extends Thread {
         return user.getClientName();
     }
 
-    /**
+/**
      * Used by process methods to check whether this connection is registered.
      *
      * @return true after Server assigns a positive client ID
@@ -98,7 +98,7 @@ public class ServerThread extends Thread {
         return getClientId() > 0;
     }
 
-    /**
+/**
      * Called by Server during registration to confirm this client's ID and name.
      * Bundles a CLIENT_ID response for this connection only.
      *
@@ -112,7 +112,7 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-    /**
+/**
      * Called by Server.syncExistingUsersTo() on the connection needing a snapshot.
      * Bundles User records as SERVER_SYNC for the client's local user map.
      *
@@ -125,7 +125,7 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-    /**
+/**
      * Called by Server on each recipient's handler when a user joins.
      * Bundles the new user's identity as SERVER_JOIN.
      *
@@ -140,17 +140,17 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-    /** Write a diagnostic labeled with this client's identity. */
+/** Write a diagnostic labeled with this client's identity. */
     private void info(String message) {
         LoggerUtil.INSTANCE.info(getDisplayName() + ": " + message);
     }
 
-    /** Notify the server that the streams are ready for communication. */
+/** Notify the server that the streams are ready for communication. */
     private void onInitialized() {
         onInitializationComplete.accept(this);
     }
 
-    /**
+/**
      * Called when this handler's receive loop ends.
      * Closes its connection and reports the lifecycle event to Server so the
      * registry and other clients can be updated.
@@ -159,7 +159,7 @@ public class ServerThread extends Thread {
         Server.INSTANCE.onServerThreadDisconnected(this);
     }
 
-    /** Route typed client input to its matching process method. */
+/** Route typed client input to its matching process method. */
     private void processPayload(Payload payload) {
         if (Constants.LOG_PAYLOADS) {
             LoggerUtil.INSTANCE.info(payload);
@@ -191,7 +191,7 @@ public class ServerThread extends Thread {
                 processReset();
                 break;
             case GRID_ACTION:
-                processGridAction((GridActionPayload) payload);
+                processGridAction((CoordinatePayload) payload);
                 break;
             default:
                 info("Unsupported client message: " + payload.getPayloadType());
@@ -199,7 +199,7 @@ public class ServerThread extends Thread {
         }
     }
 
-    /**
+/**
      * Called by processPayload() for a MESSAGE request.
      * Extracts its text and asks Server.handleMessage() to apply the client's intent.
      *
@@ -211,7 +211,7 @@ public class ServerThread extends Thread {
         }
     }
 
-    /**
+/**
      * Called by processPayload() for a REVERSE request.
      * Passes text to Server.handleReverseText(), using an empty string when absent.
      *
@@ -224,21 +224,21 @@ public class ServerThread extends Thread {
         Server.INSTANCE.handleReverseText(this, payload.getMessage() == null ? "" : payload.getMessage());
     }
 
-    /** Interpret this connection's READY payload and pass its intent to Server.handleReady() after registration. */
+/** Interpret this connection's READY payload and pass its intent to Server.handleReady() after registration. */
     private void processReady() {
         if (isRegistered()) {
             Server.INSTANCE.handleReady(this);
         }
     }
 
-    /** Interpret this connection's RESET payload and pass its intent to Server.handleReset() after registration. */
+/** Interpret this connection's RESET payload and pass its intent to Server.handleReset() after registration. */
     private void processReset() {
         if (isRegistered()) {
             Server.INSTANCE.handleReset(this);
         }
     }
 
-    /**
+/**
      * Called by processPayload() for a USERS request.
      * Passes this connection to Server.handleGetUserList() so only its client
      * receives the requested snapshot.
@@ -250,7 +250,7 @@ public class ServerThread extends Thread {
         Server.INSTANCE.handleGetUserList(this);
     }
 
-    /**
+/**
      * Called by processPayload() for a DISCONNECT request.
      * Forwards the client's intent to Server.handleDisconnect(); an unexpected
      * connection close uses the onDisconnected() lifecycle callback instead.
@@ -259,7 +259,7 @@ public class ServerThread extends Thread {
         Server.INSTANCE.handleDisconnect(this);
     }
 
-    /**
+/**
      * Called by processPayload() for CLIENT_CONNECT before registration.
      * Accepts one nonblank name, stops the name timeout, and invokes the
      * initialization callback so Server can assign an ID and register this client.
@@ -280,7 +280,7 @@ public class ServerThread extends Thread {
         onInitialized();
     }
 
-    /**
+/**
      * Bundle GameServer's public phase for this recipient.
      * @param phase the authoritative session phase
      * @return true after a local write, not client acknowledgment
@@ -292,7 +292,7 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-    /**
+/**
      * Bundle one participant's public readiness for this recipient.
      * @param clientId the participant whose status changed
      * @param ready whether that participant is ready
@@ -306,7 +306,7 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-    /**
+/**
      * Bundle GameServer-owned public points for this recipient.
      * @param clientId the scored participant
      * @param points the authoritative total
@@ -320,7 +320,7 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-    /**
+/**
      * Called by Server to bundle a reverse-command result for this recipient.
      * @param clientId the user who requested the reverse operation
      * @param message the completed display text
@@ -334,7 +334,7 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-    /**
+/**
      * Called by Server to send display text to this handler's client.
      * Builds the MESSAGE payload here, keeping payload construction out of Server.
      *
@@ -350,7 +350,7 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-    /**
+/**
      * Called by Server.handleGetUserList() on the requesting client's handler.
      * Bundles the User records and this recipient's ID for the client's "you" label.
      *
@@ -364,7 +364,7 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-    /**
+/**
      * Called by Server on each remaining recipient's handler when a user leaves.
      * Sends the departed ID; clients use their stored User for the leave notice.
      *
@@ -378,7 +378,7 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-    /**
+/**
      * Shared transport method used by this handler's action-specific send methods.
      * Writes the payload unchanged and prevents concurrent sends from interleaving.
      * A successful write does not confirm that the client processed the message.
@@ -401,7 +401,7 @@ public class ServerThread extends Thread {
         }
     }
 
-    /** Close the classic socket to release blocked platform-thread I/O. */
+/** Close the classic socket to release blocked platform-thread I/O. */
     protected void disconnect() {
         isRunning = false;
         try {
@@ -411,7 +411,63 @@ public class ServerThread extends Thread {
         }
     }
 
-    /** Initialize both object streams, receive this client's data, and always clean up. */
+/**
+     * Pass the target from this endpoint to Server for game validation.
+     * @param payload the received grid action
+     */
+    private void processGridAction(CoordinatePayload payload) {
+        if (isRegistered()) {
+            Server.INSTANCE.handleGridAction(this, payload.getX(), payload.getY());
+        }
+    }
+
+/**
+     * Bundle a public acted flag for one participant.
+     * @param clientId the participant
+     * @param acted whether the turn has been used
+     * @return true after a local write
+     */
+    protected boolean sendTurnStatus(long clientId, boolean acted) {
+        BoolPayload payload = new BoolPayload();
+        payload.setPayloadType(PayloadType.TURN_STATUS);
+        payload.setClientId(clientId);
+        payload.setValue(acted);
+        return sendToClient(payload);
+    }
+
+/**
+     * Bundle the board dimensions and seed for this recipient.
+     * @param width board width, or zero for a reset
+     * @param height board height, or zero for a reset
+     * @param seed initial random seed
+     * @return true after a local write
+     */
+    protected boolean sendGridSeed(int width, int height, long seed) {
+        GridSeedPayload payload = new GridSeedPayload();
+        payload.setPayloadType(PayloadType.GRID_SEED_SYNC);
+        payload.setWidth(width);
+        payload.setHeight(height);
+        payload.setSeed(seed);
+        return sendToClient(payload);
+    }
+
+/**
+     * Bundle a server-confirmed cell value for this recipient.
+     * @param x column
+     * @param y row
+     * @param value authoritative cell value
+     * @return true after a local write
+     */
+    protected boolean sendGridCell(int x, int y, int value) {
+        GridCellPayload payload = new GridCellPayload();
+        payload.setPayloadType(PayloadType.GRID_CELL_SYNC);
+        payload.setX(x);
+        payload.setY(y);
+        payload.setValue(value);
+        return sendToClient(payload);
+    }
+
+/** Initialize both object streams, receive this client's data, and always clean up. */
     @Override
     public void run() {
         // Both endpoints send and flush their stream header before waiting for input.
@@ -456,63 +512,7 @@ public class ServerThread extends Thread {
         }
     }
 
-    /**
-     * Pass the target and modifier from this endpoint to Server for game validation.
-     * @param payload the received grid action
-     */
-    private void processGridAction(GridActionPayload payload) {
-        if (isRegistered()) {
-            Server.INSTANCE.handleGridAction(this, payload.getX(), payload.getY(), payload.getModifier());
-        }
-    }
-
-    /**
-     * Bundle a public acted flag for one participant.
-     * @param clientId the participant
-     * @param acted whether the turn has been used
-     * @return true after a local write
-     */
-    protected boolean sendTurnStatus(long clientId, boolean acted) {
-        BoolPayload payload = new BoolPayload();
-        payload.setPayloadType(PayloadType.TURN_STATUS);
-        payload.setClientId(clientId);
-        payload.setValue(acted);
-        return sendToClient(payload);
-    }
-
-    /**
-     * Bundle the board dimensions and seed for this recipient.
-     * @param width board width, or zero for a reset
-     * @param height board height, or zero for a reset
-     * @param seed initial random seed
-     * @return true after a local write
-     */
-    protected boolean sendGridSeed(int width, int height, long seed) {
-        GridSeedPayload payload = new GridSeedPayload();
-        payload.setPayloadType(PayloadType.GRID_SEED_SYNC);
-        payload.setWidth(width);
-        payload.setHeight(height);
-        payload.setSeed(seed);
-        return sendToClient(payload);
-    }
-
-    /**
-     * Bundle a server-confirmed cell value for this recipient.
-     * @param x column
-     * @param y row
-     * @param value authoritative cell value
-     * @return true after a local write
-     */
-    protected boolean sendGridCell(int x, int y, int value) {
-        GridCellPayload payload = new GridCellPayload();
-        payload.setPayloadType(PayloadType.GRID_CELL_SYNC);
-        payload.setX(x);
-        payload.setY(y);
-        payload.setValue(value);
-        return sendToClient(payload);
-    }
-
-    /**
+/**
      * Bundle the authoritative public round number for this recipient.
      * @param round the current round
      * @return true after a local write, not client acknowledgment
@@ -524,7 +524,7 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-    /**
+/**
      * Bundle the public turn owner for this recipient.
      * @param clientId the owner ID, or zero between turns
      * @return true after a local write, not client acknowledgment

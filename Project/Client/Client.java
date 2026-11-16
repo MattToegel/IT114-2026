@@ -14,9 +14,9 @@ import java.util.Scanner;
 /** Terminal input stays on the main thread; one background thread receives messages. */
 public enum Client {
 
-    INSTANCE;
+INSTANCE;
 
-    static {
+static {
         LoggerUtil.LoggerConfig config = new LoggerUtil.LoggerConfig();
         config.setFileSizeLimit(2048 * 1024);
         config.setFileCount(1);
@@ -24,24 +24,24 @@ public enum Client {
         LoggerUtil.INSTANCE.setConfig(config);
     }
 
-    private volatile Socket server;
+private volatile Socket server;
 
-    private ObjectOutputStream out;
+private ObjectOutputStream out;
 
-    private boolean isRunning = true;
+private boolean isRunning = true;
 
-    private String clientName;
+private String clientName;
 
-    private long clientId = Constants.DEFAULT_CLIENT_ID;
+private long clientId = Constants.DEFAULT_CLIENT_ID;
 
-    private Grid grid;
+private Grid grid;
 
-    private final java.util.concurrent.ConcurrentHashMap<Long, User> knownUsers = new java.util.concurrent.ConcurrentHashMap<>();
+private final java.util.concurrent.ConcurrentHashMap<Long, User> knownUsers = new java.util.concurrent.ConcurrentHashMap<>();
 
-    private enum Command {
+private enum Command {
         CONNECT("/connect"), DISCONNECT("/disconnect"), QUIT("/quit"),
         USERS("/users"), REVERSE("/reverse"), SET_NAME("/name"),
-        READY("/ready"), RESET("/reset"), GRID_TEST("/gridtest"), GRID("/grid");
+        READY("/ready"), RESET("/reset"), GRID_ACTION("/grid"), SHOW_GRID("/showgrid");
 
         private final String trigger;
 
@@ -61,12 +61,12 @@ public enum Client {
         }
     }
 
-    /** Check whether the current socket and output stream are available. */
+/** Check whether the current socket and output stream are available. */
     public synchronized boolean isConnected() {
         return server != null && !server.isClosed() && out != null;
     }
 
-    /** Open streams in header-safe order and start a background receiver. */
+/** Open streams in header-safe order and start a background receiver. */
     private synchronized boolean connect(String host, int port) {
         if (isConnected()) {
             LoggerUtil.INSTANCE.info("Already connected; use /disconnect first");
@@ -96,9 +96,9 @@ public enum Client {
         }
     }
 
-    /** Handle a recognized slash command and leave ordinary chat text to the caller. */
+/** Handle a recognized slash command and leave ordinary chat text to the caller. */
     private boolean processClientCommand(String text) throws IOException {
-        String[] parts = text.strip().split("\\s+", 2);
+        String[] parts = text.trim().split("\\s+", 2);
         Command command = Command.fromText(parts[0]);
         if (command == null) {
             return false;
@@ -139,13 +139,12 @@ public enum Client {
                 }
                 return true;
             case USERS:
-                StringBuilder builder = new StringBuilder("Known clients:\n");
-                knownUsers.values().forEach(user -> builder.append(
+                LoggerUtil.INSTANCE.info("Known clients:");
+                knownUsers.values().forEach(user -> LoggerUtil.INSTANCE.info(
                         user.getDisplayName() + (user.isReady() ? " [ready]" : " [not ready]")
                                 + (user.isMyTurn() ? " [current turn]" : "")
                                 + (user.isSubmitted() ? " [submitted]" : " [not submitted]")
-                                + " points: " + user.getPoints() + "\n"));
-                LoggerUtil.INSTANCE.info(builder.toString());
+                                + " points: " + user.getPoints()));
                 return true;
             case REVERSE:
                 sendReverse(arguments);
@@ -156,20 +155,19 @@ public enum Client {
             case RESET:
                 sendReset();
                 return true;
-            case GRID_TEST:
+            case GRID_ACTION:
                 String[] values = arguments.trim().split("\s+");
-                if (values.length != 3) {
-                    LoggerUtil.INSTANCE.info("Use /gridtest <x> <y> <value 1-9>");
+                if (values.length != 2) {
+                    LoggerUtil.INSTANCE.info("Use /grid <x> <y>");
                     return true;
                 }
                 try {
-                    sendGridAction(Integer.parseInt(values[0]), Integer.parseInt(values[1]),
-                            Integer.parseInt(values[2]));
+                    sendGridAction(Integer.parseInt(values[0]), Integer.parseInt(values[1]));
                 } catch (NumberFormatException e) {
-                    LoggerUtil.INSTANCE.info("Use whole numbers for /gridtest");
+                    LoggerUtil.INSTANCE.info("Use whole numbers for /grid");
                 }
                 return true;
-            case GRID:
+            case SHOW_GRID:
                 showGrid();
                 return true;
             case DISCONNECT:
@@ -184,7 +182,7 @@ public enum Client {
         }
     }
 
-    /**
+/**
      * Send this client's READY intent; only the server confirms readiness.
      * Called by processClientCommand() for the matching slash command.
      * @throws IOException if the request cannot be written to the server
@@ -193,7 +191,7 @@ public enum Client {
         sendAction(PayloadType.READY, null);
     }
 
-    /**
+/**
      * Send this client's RESET intent; GameServer checks participant eligibility.
      * Called by processClientCommand() for the matching slash command.
      * @throws IOException if the request cannot be written to the server
@@ -202,7 +200,7 @@ public enum Client {
         sendAction(PayloadType.RESET, null);
     }
 
-    /**
+/**
      * Called during connection setup after both object streams are ready.
      * Bundles the chosen name as CLIENT_CONNECT so the server can register this client.
      *
@@ -215,7 +213,7 @@ public enum Client {
         sendToServer(payload);
     }
 
-    /**
+/**
      * Called by keyboard-input handling for text that is not a slash command.
      * Uses sendAction() to bundle a MESSAGE request.
      *
@@ -226,7 +224,7 @@ public enum Client {
         sendAction(PayloadType.MESSAGE, message);
     }
 
-    /**
+/**
      * Called by command handling for /reverse.
      * Sends a REVERSE request; the server performs the reversal.
      *
@@ -237,7 +235,7 @@ public enum Client {
         sendAction(PayloadType.REVERSE, message);
     }
 
-    /**
+/**
      * Called by command handling for /disconnect.
      * Sends a disconnect request without ending keyboard input, allowing reconnect.
      *
@@ -247,7 +245,7 @@ public enum Client {
         sendAction(PayloadType.DISCONNECT, null);
     }
 
-    /**
+/**
      * Shared bundling method for simple chat and command requests.
      * Called by command handling and the action-specific send methods.
      *
@@ -262,7 +260,7 @@ public enum Client {
         sendToServer(payload);
     }
 
-    /**
+/**
      * Shared transport method called after a send method bundles a payload.
      * Serializes writes on the current connection; when disconnected, prints
      * connection guidance and returns without sending.
@@ -280,7 +278,7 @@ public enum Client {
         out.reset();
     }
 
-    /** Receive data for this socket until it closes or reading fails. */
+/** Receive data for this socket until it closes or reading fails. */
     private void listenToServer(Socket connection, ObjectInputStream input) {
         try (input) {
             while (!connection.isClosed()) {
@@ -305,7 +303,7 @@ public enum Client {
         }
     }
 
-    /** Route each incoming payload to its matching process method. */
+/** Route each incoming payload to its matching process method. */
     private void processPayload(Payload payload) {
         if (Constants.LOG_PAYLOADS) {
             LoggerUtil.INSTANCE.info(payload);
@@ -365,7 +363,7 @@ public enum Client {
         }
     }
 
-    /**
+/**
      * Display the authoritative phase received by processPayload().
      * @param payload the public phase update
      */
@@ -373,7 +371,7 @@ public enum Client {
         LoggerUtil.INSTANCE.info("Game phase: " + payload.getMessage());
     }
 
-    /**
+/**
      * Apply the server's readiness update to the local User used by /users; sending /ready alone does not mark it ready.
      * @param payload the participant ID and authoritative readiness value
      */
@@ -386,7 +384,7 @@ public enum Client {
         }
     }
 
-    /**
+/**
      * Apply a GameServer-owned public score to the local User.
      * @param payload the participant ID and authoritative total
      */
@@ -399,7 +397,7 @@ public enum Client {
         }
     }
 
-    /**
+/**
      * Called by processPayload() for SERVER_SYNC.
      * Adds the server's existing-user snapshot to the local map; later join and
      * leave events keep that map current.
@@ -412,7 +410,7 @@ public enum Client {
         }
     }
 
-    /**
+/**
      * Called by processPayload() for CLIENT_ID, the registration confirmation.
      * Records this client's server-assigned identity and displays it.
      *
@@ -425,7 +423,7 @@ public enum Client {
                 "Connected as " + confirmation.getClientName() + "#" + clientId, TextFX.Color.GREEN));
     }
 
-    /**
+/**
      * Called by processPayload() for SERVER_JOIN.
      * Adds the new identity to the local map and displays the join notice.
      *
@@ -437,7 +435,7 @@ public enum Client {
         LoggerUtil.INSTANCE.info(TextFX.colorize(user.getDisplayName() + " joined", TextFX.Color.GREEN));
     }
 
-    /**
+/**
      * Called by processPayload() for SERVER_LEAVE.
      * Removes the identity from the local map and reports it only if it was present.
      *
@@ -450,7 +448,7 @@ public enum Client {
         }
     }
 
-    /**
+/**
      * Called by processPayload() to display a REVERSE response in cyan.
      * @param payload the completed reverse-command result
      */
@@ -458,7 +456,7 @@ public enum Client {
         LoggerUtil.INSTANCE.info(TextFX.colorize(payload.getMessage(), TextFX.Color.CYAN));
     }
 
-    /**
+/**
      * Called by processPayload() for MESSAGE responses.
      * Displays ordinary chat or a server-authored notice; reverse results have their own handler.
      *
@@ -472,7 +470,7 @@ public enum Client {
         LoggerUtil.INSTANCE.info(message);
     }
 
-    /**
+/**
      * Called by processPayload() if the server sends a DISCONNECT response.
      * Closes this connection while leaving keyboard input available for reconnect.
      */
@@ -480,7 +478,7 @@ public enum Client {
         closeServerConnection(server);
     }
 
-    /** Close this socket and clear shared fields only if it is still current. */
+/** Close this socket and clear shared fields only if it is still current. */
     private synchronized void closeServerConnection(Socket connection) {
         if (connection == null) {
             return;
@@ -500,7 +498,7 @@ public enum Client {
         }
     }
 
-    /** Read keyboard input until quit or end-of-input, then close the connection. */
+/** Read keyboard input until quit or end-of-input, then close the connection. */
     public void start() {
         try (Scanner input = new Scanner(System.in)) {
             while (isRunning && input.hasNextLine()) {
@@ -519,33 +517,26 @@ public enum Client {
         }
     }
 
-    /** Start the course's terminal client. */
-    public static void main(String[] args) {
-        Client.INSTANCE.start();
-    }
-
-    /**
+/**
      * Send a proposed plus-pattern action to GameServer through the endpoint.
      * @param x target column
      * @param y target row
-     * @param modifier addition from 1 through 9
      * @throws IOException when the local write fails
      */
-    private void sendGridAction(int x, int y, int modifier) throws IOException {
-        GridActionPayload payload = new GridActionPayload();
+    private void sendGridAction(int x, int y) throws IOException {
+        CoordinatePayload payload = new CoordinatePayload();
         payload.setPayloadType(PayloadType.GRID_ACTION);
         payload.setX(x);
         payload.setY(y);
-        payload.setModifier(modifier);
         sendToServer(payload);
     }
 
-    /** Show the latest server-confirmed grid to the terminal user. */
+/** Show the latest server-confirmed grid to the terminal user. */
     private synchronized void showGrid() {
         LoggerUtil.INSTANCE.info(grid == null ? "No active grid" : grid.toString());
     }
 
-    /** Apply a public acted flag to the local User used by /users.
+/** Apply a public acted flag to the local User used by /users.
      * @param payload participant ID and server-confirmed flag
      */
     private void processTurnStatus(BoolPayload payload) {
@@ -557,7 +548,7 @@ public enum Client {
         }
     }
 
-    /** Rebuild the starting board or clear it on reset.
+/** Rebuild the starting board or clear it on reset.
      * @param payload authoritative dimensions and seed
      */
     private void processGridSeed(GridSeedPayload payload) {
@@ -569,7 +560,7 @@ public enum Client {
         }
     }
 
-    /** Apply one authoritative cell update.
+/** Apply one authoritative cell update.
      * @param payload cell coordinate and value sent by the server
      */
     private void processGridCell(GridCellPayload payload) {
@@ -578,7 +569,12 @@ public enum Client {
         }
     }
 
-    /**
+/** Start the course's terminal client. */
+    public static void main(String[] args) {
+        Client.INSTANCE.start();
+    }
+
+/**
      * Display the server's public round number.
      * @param payload the authoritative current round
      */
@@ -586,7 +582,7 @@ public enum Client {
         LoggerUtil.INSTANCE.info("Round " + payload.getValue());
     }
 
-    /**
+/**
      * Apply the public turn owner to each known User for terminal and UI display.
      * An owner ID of zero clears every flag; GameServer still validates actions.
      * @param payload the owner ID selected by GameServer

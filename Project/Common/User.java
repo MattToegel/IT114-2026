@@ -43,8 +43,8 @@ public class User implements java.io.Serializable {
         this.ready = ready;
     }
 
-        /**
-     * Report public action completion without exposing a private guess.
+    /**
+     * Report public action completion.
      * @return true after a valid submission or individual-turn timeout
      */
     public boolean isSubmitted() {
@@ -75,7 +75,7 @@ public class User implements java.io.Serializable {
         isMyTurn = myTurn;
     }
 
-        /**
+    /**
      * Report the public total calculated by GameServer.
      * @return this participant's current session points
      */

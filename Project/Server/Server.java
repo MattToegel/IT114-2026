@@ -13,9 +13,9 @@ import java.util.function.Function;
 /** Accepts connections and selects the recipients of each message. */
 public enum Server {
 
-    INSTANCE;
+INSTANCE;
 
-    static {
+static {
         LoggerUtil.LoggerConfig config = new LoggerUtil.LoggerConfig();
         config.setFileSizeLimit(2048 * 1024);
         config.setFileCount(1);
@@ -23,25 +23,25 @@ public enum Server {
         LoggerUtil.INSTANCE.setConfig(config);
     }
 
-    private final ConcurrentHashMap<Long, ServerThread> connectedClients = new ConcurrentHashMap<>();
+private final ConcurrentHashMap<Long, ServerThread> connectedClients = new ConcurrentHashMap<>();
 
-    private final List<ServerThread> disconnectedBuffer = new ArrayList<>();
+private final List<ServerThread> disconnectedBuffer = new ArrayList<>();
 
-    private volatile boolean isRunning = true;
+private volatile boolean isRunning = true;
 
-    private volatile ServerSocket listener;
+private volatile ServerSocket listener;
 
-    private long nextClientId = 1;
+private long nextClientId = 1;
 
-    // The Server monitor owns connection callbacks and all game transitions.
+// The Server monitor owns connection callbacks and all game transitions.
     private final GameServer gameServer = new GameServer();
 
-    /** Register resource cleanup for JVM shutdown. */
+/** Register resource cleanup for JVM shutdown. */
     private Server() {
         Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown));
     }
 
-    /** Accept connections and give each socket its own handler thread. */
+/** Accept connections and give each socket its own handler thread. */
     private void start(int port) {
         try (ServerSocket serverSocket = new ServerSocket(port)) {
             listener = serverSocket;
@@ -59,7 +59,7 @@ public enum Server {
         }
     }
 
-    /** Stop acceptance and close current connections without holding the registry lock. */
+/** Stop acceptance and close current connections without holding the registry lock. */
     private void shutdown() {
         isRunning = false;
         try {
@@ -75,7 +75,7 @@ public enum Server {
         }
     }
 
-    /**
+/**
      * Receives ServerThread's initialization callback after its streams open and
      * processClientConnect() accepts a name. Assigns and confirms a positive ID
      * before adding this connection to the active clients. Sends the current game
@@ -107,7 +107,7 @@ public enum Server {
         sendServerJoin(client);
     }
 
-    /**
+/**
      * Collects the current User records for initialization or a /users request.
      * The recipient's ServerThread bundles the snapshot; a failed send closes it.
      *
@@ -126,7 +126,7 @@ public enum Server {
         return true;
     }
 
-    /**
+/**
      * Called by onServerThreadInitialized() after the newcomer is registered.
      * Asks each recipient's ServerThread to bundle the new User as a join event.
      *
@@ -136,7 +136,7 @@ public enum Server {
         sendOrDisconnect(recipient -> recipient.sendServerJoin(client.getUser()));
     }
 
-    /**
+/**
      * Called while registering a connection to choose an unused positive ID.
      * Restarts at 1 after overflow so reserved nonpositive IDs are never assigned.
      *
@@ -154,7 +154,7 @@ public enum Server {
         }
     }
 
-    /** Close this connection and queue one leave event on its first removal. */
+/** Close this connection and queue one leave event on its first removal. */
     private void removeClient(ServerThread client) {
         client.disconnect();
         if (connectedClients.remove(client.getClientId(), client)) {
@@ -162,7 +162,7 @@ public enum Server {
         }
     }
 
-    /**
+/**
      * Handles an explicit client disconnect request from
      * {@code ServerThread.processDisconnect()}. Uses the same cleanup as a lost connection.
      *
@@ -172,7 +172,7 @@ public enum Server {
         onServerThreadDisconnected(client);
     }
 
-    /**
+/**
      * Cleans up after ServerThread reports a closed connection or handleDisconnect()
      * handles a client request. Repeated calls do not produce duplicate leave notices.
      *
@@ -183,7 +183,7 @@ public enum Server {
         processDisconnectedBuffer();
     }
 
-    /** Forward a registered client's READY request to GameServer under the shared monitor. */
+/** Forward a registered client's READY request to GameServer under the shared monitor. */
     protected synchronized void handleReady(ServerThread sender) {
         if (connectedClients.get(sender.getClientId()) == sender) {
             try {
@@ -194,7 +194,7 @@ public enum Server {
         }
     }
 
-    /** Forward a registered client's RESET request; GameServer decides eligibility. */
+/** Forward a registered client's RESET request; GameServer decides eligibility. */
     protected synchronized void handleReset(ServerThread sender) {
         if (connectedClients.get(sender.getClientId()) == sender) {
             try {
@@ -205,7 +205,7 @@ public enum Server {
         }
     }
 
-    /**
+/**
      * Handles a /users request from ServerThread.processGetUserList().
      * Reuses the initial-sync path to send a current snapshot only to the requester.
      *
@@ -218,7 +218,7 @@ public enum Server {
         }
     }
 
-    /**
+/**
      * Handles a client's intent to send chat, passed here by
      * {@code ServerThread.processMessage()} after it reads the payload.
      * Formats ordinary text and asks each recipient's ServerThread to send it.
@@ -231,7 +231,7 @@ public enum Server {
         sendBroadcast(sender.getClientId(), message);
     }
 
-    /**
+/**
      * Handles a client's reverse request, passed here by
      * {@code ServerThread.processReverse()} as ordinary text.
      * Broadcasts the reversed result using the requesting client's identity.
@@ -244,7 +244,7 @@ public enum Server {
         sendOrDisconnect(recipient -> recipient.sendReverse(sender.getClientId(), message));
     }
 
-    /**
+/**
      * Routes chat or a server notice to all connected clients.
      * ServerThread.sendMessage() creates the payload for each recipient.
      *
@@ -255,7 +255,7 @@ public enum Server {
         sendOrDisconnect(recipient -> recipient.sendMessage(clientId, message));
     }
 
-    /** Send to current recipients and queue departures when a local write fails. */
+/** Send to current recipients and queue departures when a local write fails. */
     private void sendPass(Function<ServerThread, Boolean> sendAction) {
         for (ServerThread client : List.copyOf(connectedClients.values())) {
             if (!sendAction.apply(client)) {
@@ -264,7 +264,7 @@ public enum Server {
         }
     }
 
-    /**
+/**
      * Called by GameServer under the Server lock to send an update to all clients.
      * Each recipient's ServerThread builds and sends its payload from the given values.
      * Failed connections enter the existing buffer, drained after the full game event.
@@ -275,13 +275,13 @@ public enum Server {
         sendPass(sendAction);
     }
 
-    /** Complete a send pass before processing its disconnect notices. */
+/** Complete a send pass before processing its disconnect notices. */
     private void sendOrDisconnect(Function<ServerThread, Boolean> sendAction) {
         sendPass(sendAction);
         processDisconnectedBuffer();
     }
 
-    /**
+/**
      * Run a ServerThread send for one current connection; ignore a departed ID.
      * A failed write removes the connection and queues its departure. The caller
      * drains departures after the complete game event.
@@ -296,7 +296,7 @@ public enum Server {
         }
     }
 
-    /**
+/**
      * Finish queued departures after a client action, timer event, or connection callback.
      * GameServer updates participant state here, after the event's sends finish.
      * Its sends can queue further departures for this same loop.
@@ -310,7 +310,7 @@ public enum Server {
         }
     }
 
-    /**
+/**
      * Called by processDisconnectedBuffer() for each removed connection.
      * Asks the remaining ServerThreads to send the departure; sendPass() queues
      * any further failures for the existing cleanup loop.
@@ -321,7 +321,7 @@ public enum Server {
         sendPass(recipient -> recipient.sendLeaveNotice(departed.getUser()));
     }
 
-    /** Validate the optional port argument and start the server. */
+/** Validate the optional port argument and start the server. */
     public static void main(String[] args) {
         int port = 3000;
         try {
@@ -339,16 +339,15 @@ public enum Server {
         Server.INSTANCE.start(port);
     }
 
-    /** Forward a registered grid request; GameServer validates the turn and modifier.
+/** Forward a registered grid request; GameServer validates the turn and target.
      * @param sender the requesting connection
      * @param x the target column
      * @param y the target row
-     * @param modifier the proposed addition
      */
-    protected synchronized void handleGridAction(ServerThread sender, int x, int y, int modifier) {
+    protected synchronized void handleGridAction(ServerThread sender, int x, int y) {
         if (connectedClients.get(sender.getClientId()) == sender) {
             try {
-                gameServer.handleGridAction(sender.getUser(), x, y, modifier);
+                gameServer.handleGridAction(sender.getUser(), x, y);
             } finally {
                 processDisconnectedBuffer();
             }

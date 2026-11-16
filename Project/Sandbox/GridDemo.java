@@ -12,10 +12,10 @@ public class GridDemo {
         Grid grid = new Grid(5, 5, 12345L);
         System.out.println("Initial seeded grid:");
         System.out.println(grid);
-        List<int[]> center = grid.applyModifier(2, 2, 3);
+        List<int[]> center = grid.applyModifier(2, 2, 1);
         System.out.println("Center changed " + center.size()
                 + " cells; odd affected cells: " + grid.countOdd(center));
-        List<int[]> corner = grid.applyModifier(0, 0, 2);
+        List<int[]> corner = grid.applyModifier(0, 0, 1);
         System.out.println("Corner changed " + corner.size()
                 + " cells; odd affected cells: " + grid.countOdd(corner));
         System.out.println("After both actions:");

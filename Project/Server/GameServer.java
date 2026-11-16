@@ -1,20 +1,20 @@
 package Project.Server;
 
 import Project.Common.*;
-import Project.Exceptions.IT114CustomException;
-import Project.Exceptions.SessionNotInProgressException;
-import Project.Exceptions.NotParticipantException;
 import Project.Exceptions.AlreadySubmittedException;
+import Project.Exceptions.IT114CustomException;
+import Project.Exceptions.NotParticipantException;
 import Project.Exceptions.NotYourTurnException;
+import Project.Exceptions.SessionNotInProgressException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
-import java.util.List;
 
 /**
- * Owns a three-round grid game. Server's monitor serializes requests,
+ * Owns an odd-cell grid game. Server's monitor serializes requests,
  * disconnects, and deadlines; clients never choose cell results or points.
  */
 final class GameServer {
@@ -23,7 +23,7 @@ final class GameServer {
 
     private static final long TURN_MS = 30_000L;
 
-    private static final int LAST_ROUND = 3;
+    private static final int TARGET_POINTS = 5;
 
     private final Timer timer = new Timer(true);
 
@@ -108,34 +108,32 @@ final class GameServer {
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendReadyStatus(sender.getClientId(), true));
     }
 
-    /** Apply a target plus pattern only for the current participant and a valid modifier.
+    /** Increment a target and its cardinal neighbors for the current participant.
      * @param sender the requesting user
      * @param x target column
      * @param y target row
-     * @param modifier addition from 1 through 9
      */
-    void handleGridAction(User sender, int x, int y, int modifier) {
-        User player = players.get(sender.getClientId());
+    void handleGridAction(User sender, int x, int y) {
         try {
             checkSessionInProgress();
             checkIsParticipant(sender);
             checkNotSubmitted(sender);
             checkTakeTurn(sender);
-            if (grid == null || !grid.contains(x, y) || modifier < 1 || modifier > 9) {
-                sendMessageTo(sender.getClientId(), "Use /gridtest <x> <y> <value 1-9> inside the grid");
+            if (grid == null || !grid.contains(x, y)) {
+                sendMessageTo(sender.getClientId(), "Use /grid <x> <y> inside the grid");
                 return;
             }
-            List<int[]> affected = grid.applyModifier(x, y, modifier);
+            List<int[]> affected = grid.applyModifier(x, y, 1);
             for (int[] position : affected) {
                 sendGridCell(position[0], position[1]);
             }
             int gained = grid.countOdd(affected);
-            player.setPoints(player.getPoints() + gained);
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(sender.getClientId(), player.getPoints()));
+            sender.setPoints(sender.getPoints() + gained);
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(sender.getClientId(), sender.getPoints()));
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID,
                     sender.getDisplayName() + " changed the plus pattern at (" + x + ", " + y
                     + ") and gained " + gained + " points"));
-            player.setSubmitted(true);
+            sender.setSubmitted(true);
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(sender.getClientId(), true));
             onTurnEnd();
         } catch (IT114CustomException exception) {
@@ -160,7 +158,7 @@ final class GameServer {
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendGridCell(x, y, value));
     }
 
-    /** Apply a RESET request forwarded by Server; only an active participant may clear the session.
+    /** Apply a RESET request forwarded by Server; only an active participant may restart readiness.
      *
      * @param sender the requesting user
      */
@@ -209,7 +207,6 @@ final class GameServer {
         roundNumber = 0;
         for (User player : players.values()) {
             player.setPoints(0);
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(player.getClientId(), player.getPoints()));
         }
         gridSeed = System.currentTimeMillis();
         grid = new Grid(5, 5, gridSeed);
@@ -251,7 +248,7 @@ final class GameServer {
             Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendRound(roundNumber));
         }
         Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendCurrentTurn(currentTurnPlayerId));
-        for (Map.Entry<Long, User> entry : players.entrySet()) {
+        for (Map.Entry<Long, User> entry : new ArrayList<>(players.entrySet())) {
             long id = entry.getKey();
             User player = entry.getValue();
             Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendReadyStatus(id, true));
@@ -282,7 +279,7 @@ final class GameServer {
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendGamePhase(phase));
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendRound(roundNumber));
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID,
-                "On your turn use /gridtest <x> <y> <value 1-9>"));
+                "On your turn use /grid <x> <y>"));
         onTurnStart();
     }
 
@@ -301,7 +298,7 @@ final class GameServer {
         }
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendCurrentTurn(currentTurnPlayerId));
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, players.get(currentTurnPlayerId).getDisplayName()
-                + " has " + ((TURN_MS + 999) / 1000) + " seconds to /gridtest <x> <y> <value 1-9>"));
+                + " has " + ((TURN_MS + 999) / 1000) + " seconds to /grid <x> <y>"));
         schedule(TURN_MS);
     }
 
@@ -345,7 +342,7 @@ final class GameServer {
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendGamePhase(phase));
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID,
                 "Round " + roundNumber + " complete"));
-        if (roundNumber >= LAST_ROUND || players.isEmpty()) {
+        if (players.values().stream().anyMatch(player -> player.getPoints() >= TARGET_POINTS) || players.isEmpty()) {
             onSessionEnd();
         } else {
             onRoundStart();
@@ -373,7 +370,7 @@ final class GameServer {
      */
     private void resetSession(String message) {
         cancelDeadline();
-        for (User player : players.values()) {
+        for (User player : new ArrayList<>(players.values())) {
             player.setReady(false);
             player.setMyTurn(false);
             player.setSubmitted(false);
