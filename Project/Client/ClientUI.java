@@ -46,7 +46,7 @@ public final class ClientUI extends JPanel implements ClientListener {
     private final JButton resetButton = new JButton("Reset Session");
     private final JButton disconnectButton = new JButton("Disconnect");
     private final DefaultListModel<String> users = new DefaultListModel<>();
-    private final JPanel gridPanel = new JPanel();
+    private final GridView gridPanel = new GridView(this::playAt);
     private final JComboBox<CardChoice> handBox = new JComboBox<>();
     private final JTextArea chatArea = new JTextArea();
     private final JTextArea eventsArea = new JTextArea();
@@ -358,35 +358,11 @@ public final class ClientUI extends JPanel implements ClientListener {
         renderGrid(snapshot);
     }
 
-    /** Refresh displayed cells from a synchronized game snapshot.
+    /** Render only the accepted board and current play eligibility.
      * @param snapshot current immutable view state
      */
     private void renderGrid(ClientSnapshot snapshot) {
-        int height = snapshot.grid().size();
-        int width = height == 0 ? 0 : snapshot.grid().get(0).size();
-        if (cells.length != height || (height > 0 && cells[0].length != width)) {
-            gridPanel.removeAll();
-            cells = new JButton[height][width];
-            gridPanel.setLayout(new GridLayout(Math.max(1, height), Math.max(1, width), 4, 4));
-            for (int y = 0; y < height; y++) {
-                for (int x = 0; x < width; x++) {
-                    final int cellX = x;
-                    final int cellY = y;
-                    JButton button = new JButton();
-                    button.addActionListener(event -> playAt(cellX, cellY));
-                    cells[y][x] = button;
-                    gridPanel.add(button);
-                }
-            }
-            gridPanel.revalidate();
-            gridPanel.repaint();
-        }
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                cells[y][x].setText(String.valueOf(snapshot.grid().get(y).get(x)));
-                cells[y][x].setEnabled(snapshot.canPlay());
-            }
-        }
+        gridPanel.showGrid(snapshot.grid(), snapshot.canPlay());
     }
 
     /** Send a selected card and clicked board coordinate.
