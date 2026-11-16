@@ -8,6 +8,13 @@ import java.io.ObjectOutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.Scanner;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 
 
 
@@ -36,13 +43,13 @@ public enum Client {
 
     private Grid grid;
 
-    private java.util.Map<Integer, Card> cardCatalog = new java.util.HashMap<>();
+    private Map<Integer, Card> cardCatalog = new HashMap<>();
 
-    private java.util.List<Integer> hand = new java.util.ArrayList<>();
+    private List<Integer> hand = new ArrayList<>();
 
-    private java.util.Map<Long, Integer> publicHandCounts = new java.util.HashMap<>();
+    private Map<Long, Integer> publicHandCounts = new HashMap<>();
 
-    private final java.util.concurrent.ConcurrentHashMap<Long, User> knownUsers = new java.util.concurrent.ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, User> knownUsers = new ConcurrentHashMap<>();
 
     private String phase = "INACTIVE";
 
@@ -57,7 +64,7 @@ public enum Client {
     private enum Command {
         CONNECT("/connect"), DISCONNECT("/disconnect"), QUIT("/quit"),
         USERS("/users"), REVERSE("/reverse"), SET_NAME("/name"),
-        READY("/ready"), RESET("/reset"), CARD("/card"), HAND("/hand"), GRID("/grid");
+        READY("/ready"), RESET("/reset"), CARD("/card"), HAND("/hand"), SHOW_GRID("/showgrid");
 
         private final String trigger;
 
@@ -155,7 +162,7 @@ public enum Client {
      * @param observer the active view
      */
     public synchronized void attachListener(ClientListener observer) {
-        listener = java.util.Objects.requireNonNull(observer);
+        listener = Objects.requireNonNull(observer);
         observer.onState(snapshot());
     }
 
@@ -188,17 +195,17 @@ public enum Client {
      * @return an immutable current view snapshot
      */
     public synchronized ClientSnapshot snapshot() {
-        java.util.List<ClientSnapshot.Player> players = new java.util.ArrayList<>();
+        List<ClientSnapshot.Player> players = new ArrayList<>();
         knownUsers.values().stream()
-                .sorted(java.util.Comparator.comparingLong(User::getClientId))
+                .sorted(Comparator.comparingLong(User::getClientId))
                 .forEach(user -> players.add(new ClientSnapshot.Player(
                         user.getClientId(), user.getDisplayName(),
                         user.isReady(), user.isSubmitted(), user.isMyTurn(), user.getPoints(),
                         publicHandCounts.getOrDefault(user.getClientId(), 0))));
-        java.util.List<java.util.List<Integer>> cells = new java.util.ArrayList<>();
+        List<List<Integer>> cells = new ArrayList<>();
         if (grid != null) {
             for (int y = 0; y < grid.getHeight(); y++) {
-                java.util.List<Integer> row = new java.util.ArrayList<>();
+                List<Integer> row = new ArrayList<>();
                 for (int x = 0; x < grid.getWidth(); x++) {
                     row.add(grid.getValue(x, y));
                 }
@@ -209,7 +216,7 @@ public enum Client {
                 : Math.max(0, (timerDeadlineNanos - System.nanoTime()) / 1_000_000);
         return new ClientSnapshot(isConnected(), clientId, phase, round, currentTurnId,
                 (int) Math.min(Integer.MAX_VALUE, remaining), players, cells,
-                new java.util.ArrayList<>(cardCatalog.values()), hand);
+                new ArrayList<>(cardCatalog.values()), hand);
     }
 
     /** Notify the active view after a state-changing endpoint message. */
@@ -336,7 +343,7 @@ public enum Client {
             case HAND:
                 showHand();
                 return true;
-            case GRID:
+            case SHOW_GRID:
                 showGrid();
                 return true;
             case DISCONNECT:
@@ -571,8 +578,9 @@ public enum Client {
         }
     }
 
-    /** Apply a GameServer-owned public score to the local User.
-     * @param payload participant ID and authoritative total
+    /**
+     * Apply a GameServer-owned public score to the local User.
+     * @param payload the participant ID and authoritative total
      */
     private void processPoints(IntPayload payload) {
         User user = knownUsers.get(payload.getClientId());
@@ -668,7 +676,10 @@ public enum Client {
                 : System.nanoTime() + milliseconds * 1_000_000L;
     }
 
-    /** Handle a server disconnect response while leaving keyboard input available. */
+    /**
+     * Called by processPayload() if the server sends a DISCONNECT response.
+     * Closes this connection while leaving keyboard input available for reconnect.
+     */
     private void processDisconnect() {
         closeServerConnection(server);
     }
@@ -718,11 +729,6 @@ public enum Client {
         } finally {
             closeServerConnection(server);
         }
-    }
-
-    /** Start the course's terminal client. */
-    public static void main(String[] args) {
-        Client.INSTANCE.start();
     }
 
     /**
@@ -804,7 +810,7 @@ public enum Client {
      * @param payload owner-only card IDs
      */
     private void processCardHand(CardHandPayload payload) {
-        hand = new java.util.ArrayList<>(payload.getCardIds());
+        hand = new ArrayList<>(payload.getCardIds());
         LoggerUtil.INSTANCE.info("Your hand: " + hand);
     }
 
@@ -815,6 +821,11 @@ public enum Client {
         publicHandCounts.put(payload.getClientId(), payload.getValue());
         LoggerUtil.INSTANCE.info("Player " + payload.getClientId()
                 + " has " + payload.getValue() + " cards");
+    }
+
+    /** Start the course's terminal client. */
+    public static void main(String[] args) {
+        Client.INSTANCE.start();
     }
 
     /**

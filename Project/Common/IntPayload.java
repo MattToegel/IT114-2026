@@ -5,7 +5,7 @@ public class IntPayload extends Payload {
     private int value;
 
     /**
-     * Read the typed whole-number value used by a guess or public update.
+     * Read the typed whole-number value used by a public update.
      * @return the payload's numeric value
      */
     public int getValue() {
@@ -14,7 +14,7 @@ public class IntPayload extends Payload {
 
     /**
      * Set a typed whole-number value before endpoint transport.
-     * @param value the guess, score, or round number to carry
+     * @param value the score or round number to carry
      */
     public void setValue(int value) {
         this.value = value;

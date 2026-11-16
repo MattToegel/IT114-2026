@@ -16,7 +16,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 
 /**
- * Owns a three-round grid-and-cards game. Server's monitor serializes requests,
+ * Owns a grid-and-cards game. Server's monitor serializes requests,
  * disconnects, and deadlines; clients never choose cell results or points.
  */
 final class GameServer {
@@ -25,7 +25,7 @@ final class GameServer {
 
     private static final long TURN_MS = 30_000L;
 
-    private static final int LAST_ROUND = 3;
+    private static final int TARGET_POINTS = 5;
 
     private static final int HAND_SIZE = 3;
 
@@ -177,7 +177,7 @@ final class GameServer {
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendGridCell(x, y, value));
     }
 
-    /** Apply a RESET request forwarded by Server; only an active participant may clear the session.
+    /** Apply a RESET request forwarded by Server; only an active participant may restart readiness.
      *
      * @param sender the requesting user
      */
@@ -391,7 +391,7 @@ final class GameServer {
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendGamePhase(phase));
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID,
                 "Round " + roundNumber + " complete"));
-        if (roundNumber >= LAST_ROUND || players.isEmpty()) {
+        if (players.values().stream().anyMatch(player -> player.getPoints() >= TARGET_POINTS) || players.isEmpty()) {
             onSessionEnd();
         } else {
             onRoundStart();

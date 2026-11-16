@@ -411,51 +411,6 @@ public class ServerThread extends Thread {
         }
     }
 
-    /** Initialize both object streams, receive this client's data, and always clean up. */
-    @Override
-    public void run() {
-        // Both endpoints send and flush their stream header before waiting for input.
-        try (Socket connection = client) {
-            connection.setSoTimeout(Constants.SETUP_TIMEOUT_MS);
-            try (ObjectOutputStream output = new ObjectOutputStream(connection.getOutputStream())) {
-                out = output;
-                output.flush();
-                try (ObjectInputStream input = new ObjectInputStream(connection.getInputStream())) {
-                    connection.setSoTimeout(0);
-                    isRunning = true;
-                    nameTimer.schedule(new java.util.TimerTask() {
-                        @Override
-                        public void run() {
-                            if (getClientName() == null) {
-                                disconnect();
-                            }
-                        }
-                    }, Constants.SETUP_TIMEOUT_MS);
-                    while (isRunning) {
-                        try {
-                            processPayload((Payload) input.readObject());
-                        } catch (ClassCastException e) {
-                            info("Ignoring an invalid payload");
-                        } catch (ClassNotFoundException e) {
-                            info("Unknown message class: " + e.getMessage());
-                        }
-                    }
-                }
-            }
-        } catch (IOException e) {
-            if (isRunning) {
-                info("Connection ended: " + e.getMessage());
-            } else {
-                info("Connection closed during setup or cleanup");
-            }
-        } finally {
-            disconnect();
-            nameTimer.cancel();
-            // Notify the server after this handler closes its connection.
-            onDisconnected();
-        }
-    }
-
     /**
      * Pass this endpoint's card and target values to Server for validation.
      * @param payload the received card request
@@ -548,17 +503,49 @@ public class ServerThread extends Thread {
         return sendToClient(payload);
     }
 
-    /**
-     * Bundle an approximate countdown for one recipient's display.
-     * GameServer alone decides when its TimerTask expires.
-     * @param milliseconds remaining time, or zero after reset
-     * @return true after a local write
-     */
-    protected boolean sendTimerSync(int milliseconds) {
-        IntPayload payload = new IntPayload();
-        payload.setPayloadType(PayloadType.TIMER_SYNC);
-        payload.setValue(milliseconds);
-        return sendToClient(payload);
+    /** Initialize both object streams, receive this client's data, and always clean up. */
+    @Override
+    public void run() {
+        // Both endpoints send and flush their stream header before waiting for input.
+        try (Socket connection = client) {
+            connection.setSoTimeout(Constants.SETUP_TIMEOUT_MS);
+            try (ObjectOutputStream output = new ObjectOutputStream(connection.getOutputStream())) {
+                out = output;
+                output.flush();
+                try (ObjectInputStream input = new ObjectInputStream(connection.getInputStream())) {
+                    connection.setSoTimeout(0);
+                    isRunning = true;
+                    nameTimer.schedule(new java.util.TimerTask() {
+                        @Override
+                        public void run() {
+                            if (getClientName() == null) {
+                                disconnect();
+                            }
+                        }
+                    }, Constants.SETUP_TIMEOUT_MS);
+                    while (isRunning) {
+                        try {
+                            processPayload((Payload) input.readObject());
+                        } catch (ClassCastException e) {
+                            info("Ignoring an invalid payload");
+                        } catch (ClassNotFoundException e) {
+                            info("Unknown message class: " + e.getMessage());
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            if (isRunning) {
+                info("Connection ended: " + e.getMessage());
+            } else {
+                info("Connection closed during setup or cleanup");
+            }
+        } finally {
+            disconnect();
+            nameTimer.cancel();
+            // Notify the server after this handler closes its connection.
+            onDisconnected();
+        }
     }
 
     /**
@@ -582,6 +569,19 @@ public class ServerThread extends Thread {
         Payload payload = new Payload();
         payload.setPayloadType(PayloadType.CURRENT_TURN);
         payload.setClientId(clientId);
+        return sendToClient(payload);
+    }
+
+    /**
+     * Bundle an approximate countdown for one recipient's display.
+     * GameServer alone decides when its TimerTask expires.
+     * @param milliseconds remaining time, or zero after reset
+     * @return true after a local write
+     */
+    protected boolean sendTimerSync(int milliseconds) {
+        IntPayload payload = new IntPayload();
+        payload.setPayloadType(PayloadType.TIMER_SYNC);
+        payload.setValue(milliseconds);
         return sendToClient(payload);
     }
 }

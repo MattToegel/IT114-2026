@@ -2,6 +2,7 @@ package Project.Client;
 
 import Project.Common.Card;
 import javax.swing.*;
+import javax.swing.Timer;
 import java.awt.*;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
@@ -19,7 +20,7 @@ public final class ClientUI extends JPanel implements ClientListener {
     private record CardChoice(int id, int modifier) {
         @Override
         public String toString() {
-            return "Card " + id + " (+" + modifier + ")";
+            return "Card " + id + " (" + (modifier >= 0 ? "+" : "") + modifier + ")";
         }
     }
 
@@ -51,7 +52,7 @@ public final class ClientUI extends JPanel implements ClientListener {
     private final JTextArea eventsArea = new JTextArea();
     private final JTextField chatField = new JTextField();
     private final JButton chatButton = new JButton("Send");
-    private final javax.swing.Timer displayTimer;
+    private final Timer displayTimer;
     private JButton[][] cells = new JButton[0][0];
     private List<Integer> lastHand = List.of();
     private ClientSnapshot shown;
@@ -68,7 +69,7 @@ public final class ClientUI extends JPanel implements ClientListener {
         buildGameScreen();
         add(screens, BorderLayout.CENTER);
         screenLayout.show(screens, "connection");
-        displayTimer = new javax.swing.Timer(250, event -> updateTimerLabel());
+        displayTimer = new Timer(250, event -> updateTimerLabel());
         displayTimer.start();
     }
 
