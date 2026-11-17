@@ -55,7 +55,7 @@ public enum Client {
 
     private int round;
 
-    private long currentTurnId;
+    private long currentTurnId = Constants.DEFAULT_CLIENT_ID;
 
     private long timerDeadlineNanos;
 
@@ -705,7 +705,7 @@ public enum Client {
             publicHandCounts.clear();
             phase = "INACTIVE";
             round = 0;
-            currentTurnId = 0;
+            currentTurnId = Constants.DEFAULT_CLIENT_ID;
             timerDeadlineNanos = 0;
             LoggerUtil.INSTANCE.info(TextFX.colorize("Disconnected", TextFX.Color.YELLOW));
             publishState();
