@@ -48,7 +48,7 @@ final class GameServer {
 
     private Deck deck;
 
-    private long currentTurnPlayerId;
+    private long currentTurnPlayerId = Constants.DEFAULT_CLIENT_ID;
 
     /**
      * Reject game actions outside an active session before they can change game state.
@@ -237,7 +237,7 @@ final class GameServer {
         gridSeed = System.currentTimeMillis();
         grid = new Grid(5, 5, gridSeed);
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendGridSeed(grid.getWidth(), grid.getHeight(), gridSeed));
-        currentTurnPlayerId = 0;
+        currentTurnPlayerId = Constants.DEFAULT_CLIENT_ID;
         onRoundStart();
     }
 
@@ -328,11 +328,11 @@ final class GameServer {
         currentTurnPlayerId = players.entrySet().stream()
                 .filter(entry -> !entry.getValue().isSubmitted())
                 .mapToLong(Map.Entry::getKey)
-                .min().orElse(0);
+                .min().orElse(Constants.DEFAULT_CLIENT_ID);
         for (User player : players.values()) {
             player.setMyTurn(player.getClientId() == currentTurnPlayerId);
         }
-        if (currentTurnPlayerId == 0) {
+        if (currentTurnPlayerId == Constants.DEFAULT_CLIENT_ID) {
             onRoundEnd();
             return;
         }
@@ -358,7 +358,7 @@ final class GameServer {
         if (current != null) {
             current.setMyTurn(false);
         }
-        currentTurnPlayerId = 0;
+        currentTurnPlayerId = Constants.DEFAULT_CLIENT_ID;
         if (allActed()) {
             onRoundEnd();
         } else {
@@ -382,7 +382,7 @@ final class GameServer {
             return;
         }
         cancelDeadline();
-        currentTurnPlayerId = 0;
+        currentTurnPlayerId = Constants.DEFAULT_CLIENT_ID;
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendCurrentTurn(0));
         phase = Phase.EVALUATION;
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendGamePhase(phase));
@@ -437,7 +437,7 @@ final class GameServer {
         deck = null;
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCatalog(List.of()));
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendGridSeed(0, 0, 0));
-        currentTurnPlayerId = 0;
+        currentTurnPlayerId = Constants.DEFAULT_CLIENT_ID;
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendCurrentTurn(0));
         phase = Phase.INACTIVE;
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendGamePhase(phase));
