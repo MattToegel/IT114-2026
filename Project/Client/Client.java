@@ -1,5 +1,6 @@
 package Project.Client;
 
+import Project.Client.ClientSnapshot.Player;
 import Project.Common.*;
 
 import java.io.IOException;
@@ -15,10 +16,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 
 
-/** Terminal input stays on the main thread; one background thread receives messages. */
+/** Shared client library for terminal and Swing, with a background server receiver. */
 public enum Client {
 
     INSTANCE;
@@ -59,7 +62,7 @@ public enum Client {
 
     private long timerDeadlineNanos;
 
-    private volatile ClientListener listener;
+    private final CopyOnWriteArrayList<ClientListener> listeners = new CopyOnWriteArrayList<>();
 
     private enum Command {
         CONNECT("/connect"), DISCONNECT("/disconnect"), QUIT("/quit"),
@@ -108,7 +111,7 @@ public enum Client {
         }
         try {
             sendConnectionData();
-            publishState();
+            emit(listener -> listener.onConnectionChanged(true));
             return true;
         } catch (IOException e) {
             closeServerConnection(server);
@@ -158,82 +161,128 @@ public enum Client {
         closeServerConnection(server);
     }
 
-    /** Register one view observer and send it the current snapshot.
-     * @param observer the active view
+    /** Subscribe a view and give it the current values once.
+     * @param listener subscriber whose callbacks should return quickly
      */
-    public synchronized void attachListener(ClientListener observer) {
-        listener = Objects.requireNonNull(observer);
-        observer.onState(snapshot());
-    }
-
-    /** Let only the current observer detach itself.
-     * @param observer the view requesting detachment
-     * @return true when this view was still active
-     */
-    public synchronized boolean detachListener(ClientListener observer) {
-        if (listener != observer) {
-            return false;
+    public synchronized void subscribe(ClientListener listener) {
+        if (listeners.addIfAbsent(Objects.requireNonNull(listener))) {
+            ClientSnapshot state = snapshot();
+            listener.onConnectionChanged(state.connected());
+            listener.onGameChanged(state.phase(), state.round(), state.currentTurnId());
+            listener.onPlayersChanged(state.clientId(), state.players());
+            listener.onBoardChanged(state.grid());
+            listener.onHandChanged(cardsInHand());
+            listener.onTimerChanged(state.remainingMillis());
         }
-        listener = null;
-        return true;
     }
 
-    /** Capture the current socket so delayed view cleanup cannot close a later connection.
-     * @param observer the view being closed
-     * @return a socket-specific close action, or a no-op for an old view
+    /** Remove this subscriber without closing the connection.
+     * @param listener subscriber to remove
+     * @return whether the subscriber was registered
      */
-    public synchronized Runnable detachListenerForClose(ClientListener observer) {
-        if (listener != observer) {
+    public boolean unsubscribe(ClientListener listener) {
+        return listeners.remove(listener);
+    }
+
+    /** Capture the socket this window observed so a deferred close cannot affect a newer socket.
+     * @param listener window being closed
+     * @return cleanup for that socket, or a no-op if already detached
+     */
+    synchronized Runnable unsubscribeForClose(ClientListener listener) {
+        if (!unsubscribe(listener)) {
             return () -> {};
         }
-        listener = null;
         Socket connection = server;
         return () -> closeServerConnection(connection);
     }
 
-    /** Copy synchronized ordinary values for Swing without exposing network payloads.
-     * @return an immutable current view snapshot
+    /** Read the accepted display values together, for example when adding a subscriber.
+     * @return an immutable copy of the current state
      */
     public synchronized ClientSnapshot snapshot() {
-        List<ClientSnapshot.Player> players = new ArrayList<>();
-        knownUsers.values().stream()
+        return new ClientSnapshot(isConnected(), clientId, phase, round, currentTurnId,
+                remainingMillis(), playerRows(), boardRows(), new ArrayList<>(cardCatalog.values()), hand);
+    }
+
+    /** Copy the public roster so later User changes cannot alter a queued update.
+     * @return public player rows sorted by client ID
+     */
+    private List<Player> playerRows() {
+        return knownUsers.values().stream()
                 .sorted(Comparator.comparingLong(User::getClientId))
-                .forEach(user -> players.add(new ClientSnapshot.Player(
-                        user.getClientId(), user.getDisplayName(),
+                .map(user -> new Player(user.getClientId(), user.getDisplayName(),
                         user.isReady(), user.isSubmitted(), user.isMyTurn(), user.getPoints(),
-                        publicHandCounts.getOrDefault(user.getClientId(), 0))));
-        List<List<Integer>> cells = new ArrayList<>();
-        if (grid != null) {
-            for (int y = 0; y < grid.getHeight(); y++) {
-                List<Integer> row = new ArrayList<>();
-                for (int x = 0; x < grid.getWidth(); x++) {
-                    row.add(grid.getValue(x, y));
-                }
-                cells.add(row);
-            }
+                        publicHandCounts.getOrDefault(user.getClientId(), 0)))
+                .toList();
+    }
+
+    /** Copy accepted board values before handing them to a view.
+     * @return immutable grid rows, or an empty list when there is no board
+     */
+    private List<List<Integer>> boardRows() {
+        if (grid == null) {
+            return List.of();
         }
+        List<List<Integer>> rows = new ArrayList<>();
+        for (int y = 0; y < grid.getHeight(); y++) {
+            List<Integer> row = new ArrayList<>();
+            for (int x = 0; x < grid.getWidth(); x++) {
+                row.add(grid.getValue(x, y));
+            }
+            rows.add(List.copyOf(row));
+        }
+        return List.copyOf(rows);
+    }
+
+    /** Look up the private hand in the public card catalog.
+     * @return held cards with known definitions
+     */
+    private List<Card> cardsInHand() {
+        return hand.stream().map(cardCatalog::get).filter(Objects::nonNull).toList();
+    }
+
+    /** Convert the local deadline to a duration for display.
+     * @return estimated remaining milliseconds, or zero after expiration
+     */
+    private int remainingMillis() {
         long remaining = timerDeadlineNanos == 0 ? 0
                 : Math.max(0, (timerDeadlineNanos - System.nanoTime()) / 1_000_000);
-        return new ClientSnapshot(isConnected(), clientId, phase, round, currentTurnId,
-                (int) Math.min(Integer.MAX_VALUE, remaining), players, cells,
-                new ArrayList<>(cardCatalog.values()), hand);
+        return (int) Math.min(Integer.MAX_VALUE, remaining);
     }
 
-    /** Notify the active view after a state-changing endpoint message. */
-    private void publishState() {
-        ClientListener observer = listener;
-        if (observer != null) {
-            observer.onState(snapshot());
+    /** Call the relevant method on each subscriber on the current thread.
+     * @param callback the listener method to call
+     */
+    private void emit(Consumer<ClientListener> callback) {
+        listeners.forEach(callback);
+    }
+
+    /** Notify subscribers with one shared, immutable copy of the roster. */
+    private void emitPlayers() {
+        if (!listeners.isEmpty()) {
+            List<Player> players = playerRows();
+            emit(listener -> listener.onPlayersChanged(clientId, players));
         }
     }
 
-    /** Show ordinary chat and game notices in the active view.
-     * @param message display text
-     */
-    private void publishMessage(String message) {
-        ClientListener observer = listener;
-        if (observer != null && message != null) {
-            observer.onMessage(message);
+    /** Notify subscribers after a phase, round, or current-turn update. */
+    private void emitGame() {
+        emit(listener -> listener.onGameChanged(phase, round, currentTurnId));
+    }
+
+    /** Notify subscribers with one shared copy after a board change. */
+    private void emitBoard() {
+        if (!listeners.isEmpty()) {
+            List<List<Integer>> cells = boardRows();
+            emit(listener -> listener.onBoardChanged(cells));
+        }
+    }
+
+    /** Notify subscribers after received hand or card definitions change. */
+    private void emitHand() {
+        if (!listeners.isEmpty()) {
+            List<Card> cards = cardsInHand();
+            emit(listener -> listener.onHandChanged(cards));
         }
     }
 
@@ -550,19 +599,16 @@ public enum Client {
             default:
                 break;
         }
-        if (payload.getPayloadType() != PayloadType.MESSAGE
-                && payload.getPayloadType() != PayloadType.DISCONNECT) {
-            publishState();
-        }
     }
 
     /**
-     * Display the authoritative phase received by processPayload().
+     * Store and announce the authoritative phase received by processPayload().
      * @param payload the public phase update
      */
     private void processGamePhase(Payload payload) {
         phase = payload.getMessage();
         LoggerUtil.INSTANCE.info("Game phase: " + payload.getMessage());
+        emitGame();
     }
 
     /**
@@ -575,6 +621,7 @@ public enum Client {
             user.setReady(payload.getValue());
             LoggerUtil.INSTANCE.info(user.getDisplayName()
                     + (user.isReady() ? " ready" : " not ready"));
+            emitPlayers();
         }
     }
 
@@ -588,6 +635,7 @@ public enum Client {
             user.setPoints(payload.getValue());
             LoggerUtil.INSTANCE.info(user.getDisplayName()
                     + " points: " + user.getPoints());
+            emitPlayers();
         }
     }
 
@@ -602,6 +650,7 @@ public enum Client {
         for (User user : userList.getUsers()) {
             knownUsers.put(user.getClientId(), user);
         }
+        emitPlayers();
     }
 
     /**
@@ -615,6 +664,7 @@ public enum Client {
         knownUsers.put(clientId, new User(clientId, confirmation.getClientName()));
         LoggerUtil.INSTANCE.info(TextFX.colorize(
                 "Connected as " + confirmation.getClientName() + "#" + clientId, TextFX.Color.GREEN));
+        emitPlayers();
     }
 
     /**
@@ -627,6 +677,7 @@ public enum Client {
         User user = new User(connection.getClientId(), connection.getClientName());
         knownUsers.putIfAbsent(user.getClientId(), user);
         LoggerUtil.INSTANCE.info(TextFX.colorize(user.getDisplayName() + " joined", TextFX.Color.GREEN));
+        emitPlayers();
     }
 
     /**
@@ -640,6 +691,7 @@ public enum Client {
         if (user != null) {
             publicHandCounts.remove(user.getClientId());
             LoggerUtil.INSTANCE.info(TextFX.colorize(user.getDisplayName() + " left", TextFX.Color.YELLOW));
+            emitPlayers();
         }
     }
 
@@ -649,7 +701,10 @@ public enum Client {
      */
     private void processReverse(Payload payload) {
         LoggerUtil.INSTANCE.info(TextFX.colorize(payload.getMessage(), TextFX.Color.CYAN));
-        publishMessage(payload.getMessage());
+        String message = payload.getMessage();
+        if (message != null) {
+            emit(listener -> listener.onMessage(message, false));
+        }
     }
 
     /**
@@ -660,11 +715,12 @@ public enum Client {
      */
     private void processMessage(Payload payload) {
         String message = payload.getMessage();
-        if (payload.getClientId() == Constants.DEFAULT_CLIENT_ID) {
-            message = TextFX.colorize(message, TextFX.Color.CYAN);
+        if (message == null) {
+            return;
         }
-        LoggerUtil.INSTANCE.info(message);
-        publishMessage(payload.getMessage());
+        boolean chat = payload.getClientId() != Constants.DEFAULT_CLIENT_ID;
+        LoggerUtil.INSTANCE.info(chat ? message : TextFX.colorize(message, TextFX.Color.CYAN));
+        emit(listener -> listener.onMessage(message, chat));
     }
 
     /** Store approximate remaining time for display; only Server expires turns.
@@ -674,6 +730,7 @@ public enum Client {
         int milliseconds = Math.max(0, payload.getValue());
         timerDeadlineNanos = milliseconds == 0 ? 0
                 : System.nanoTime() + milliseconds * 1_000_000L;
+        emit(listener -> listener.onTimerChanged(milliseconds));
     }
 
     /**
@@ -708,7 +765,12 @@ public enum Client {
             currentTurnId = Constants.DEFAULT_CLIENT_ID;
             timerDeadlineNanos = 0;
             LoggerUtil.INSTANCE.info(TextFX.colorize("Disconnected", TextFX.Color.YELLOW));
-            publishState();
+            emit(listener -> listener.onConnectionChanged(false));
+            emitGame();
+            emitPlayers();
+            emitBoard();
+            emitHand();
+            emit(listener -> listener.onTimerChanged(0));
         }
     }
 
@@ -769,6 +831,7 @@ public enum Client {
             user.setSubmitted(payload.getValue());
             LoggerUtil.INSTANCE.info(user.getDisplayName()
                     + (user.isSubmitted() ? " has acted" : " has not acted"));
+            emitPlayers();
         }
     }
 
@@ -781,7 +844,10 @@ public enum Client {
         } else if (payload.getWidth() > 0 && payload.getHeight() > 0
                 && payload.getWidth() <= 100 && payload.getHeight() <= 100) {
             grid = new Grid(payload.getWidth(), payload.getHeight(), payload.getSeed());
+        } else {
+            return;
         }
+        emitBoard();
     }
 
     /** Apply one authoritative cell update.
@@ -790,6 +856,7 @@ public enum Client {
     private void processGridCell(GridCellPayload payload) {
         if (grid != null && grid.contains(payload.getX(), payload.getY())) {
             grid.setValue(payload.getX(), payload.getY(), payload.getValue());
+            emitBoard();
         }
     }
 
@@ -800,10 +867,12 @@ public enum Client {
         cardCatalog.clear();
         if (payload.getCards().isEmpty()) {
             publicHandCounts.clear();
+            emitPlayers();
         }
         for (Card card : payload.getCards()) {
             cardCatalog.put(card.getId(), card);
         }
+        emitHand();
     }
 
     /** Replace this connection's private hand.
@@ -812,6 +881,7 @@ public enum Client {
     private void processCardHand(CardHandPayload payload) {
         hand = new ArrayList<>(payload.getCardIds());
         LoggerUtil.INSTANCE.info("Your hand: " + hand);
+        emitHand();
     }
 
     /** Update one public hand size without receiving its card IDs.
@@ -821,6 +891,7 @@ public enum Client {
         publicHandCounts.put(payload.getClientId(), payload.getValue());
         LoggerUtil.INSTANCE.info("Player " + payload.getClientId()
                 + " has " + payload.getValue() + " cards");
+        emitPlayers();
     }
 
     /** Start the course's terminal client. */
@@ -829,12 +900,13 @@ public enum Client {
     }
 
     /**
-     * Display the server's public round number.
+     * Store and announce the server's public round number.
      * @param payload the authoritative current round
      */
     private void processRound(IntPayload payload) {
         round = payload.getValue();
         LoggerUtil.INSTANCE.info("Round " + payload.getValue());
+        emitGame();
     }
 
     /**
@@ -848,5 +920,7 @@ public enum Client {
             user.setMyTurn(user.getClientId() == payload.getClientId());
         }
         LoggerUtil.INSTANCE.info("Current turn: " + payload.getClientId());
+        emitGame();
+        emitPlayers();
     }
 }
