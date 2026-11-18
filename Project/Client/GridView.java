@@ -36,9 +36,9 @@ public final class GridView extends JPanel {
     }
 
     /**
-     * Receive copied snapshot values on the EDT, then request a painting pass.
-     * @param values the server-confirmed board from ClientSnapshot
-     * @param canPlay whether the current snapshot permits a card action
+     * Receive copied board values on the EDT, then request a painting pass.
+     * @param values the server-confirmed board sent through the client callback
+     * @param canPlay whether the view currently permits a card action
      */
     public void showGrid(List<List<Integer>> values, boolean canPlay) {
         cells = values.stream().map(List::copyOf).toList();

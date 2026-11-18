@@ -1,6 +1,8 @@
 package Project.Client;
 
+import Project.Client.ClientSnapshot.Player;
 import Project.Common.Card;
+import Project.Common.Constants;
 import javax.swing.*;
 import javax.swing.Timer;
 import java.awt.*;
@@ -53,10 +55,12 @@ public final class ClientUI extends JPanel implements ClientListener {
     private final JTextField chatField = new JTextField();
     private final JButton chatButton = new JButton("Send");
     private final Timer displayTimer;
-    private JButton[][] cells = new JButton[0][0];
-    private List<Integer> lastHand = List.of();
-    private ClientSnapshot shown;
-    private long snapshotAtNanos;
+    private boolean connected;
+    private boolean ready;
+    private boolean myTurn;
+    private String phase = "INACTIVE";
+    private long turnId = Constants.DEFAULT_CLIENT_ID;
+    private long timerDeadlineNanos;
     private boolean closed;
 
     /** Construct components only on Swing's event dispatch thread. */
@@ -90,7 +94,7 @@ public final class ClientUI extends JPanel implements ClientListener {
                 closeView();
             }
         });
-        client.attachListener(this);
+        client.subscribe(this);
         frame.setVisible(true);
     }
 
@@ -101,7 +105,7 @@ public final class ClientUI extends JPanel implements ClientListener {
         }
         closed = true;
         displayTimer.stop();
-        actions.execute(client.detachListenerForClose(this));
+        actions.execute(client.unsubscribeForClose(this));
         actions.shutdown();
     }
 
@@ -253,7 +257,7 @@ public final class ClientUI extends JPanel implements ClientListener {
         try {
             command.run();
         } catch (IOException e) {
-            onMessage("Send failed: " + e.getMessage());
+            onMessage("Send failed: " + e.getMessage(), false);
             client.disconnectClient();
         }
     }
@@ -265,104 +269,165 @@ public final class ClientUI extends JPanel implements ClientListener {
         }
     }
 
-    /** Receive an immutable game snapshot from Client.
-     * @param snapshot current immutable view state
+    /** Queue one widget update and ignore callbacks for a closed view.
+     * @param update short Swing work to run on the EDT
      */
-    @Override
-    public void onState(ClientSnapshot snapshot) {
+    private void updateView(Runnable update) {
         SwingUtilities.invokeLater(() -> {
             if (!closed) {
-                render(snapshot);
+                update.run();
             }
         });
     }
 
-    /** Receive chat or a game notice from Client.
-     * @param message display text
+    /** Switch between connection and game controls on the EDT.
+     * @param connected whether the client has an open connection
      */
     @Override
-    public void onMessage(String message) {
-        SwingUtilities.invokeLater(() -> {
-            if (closed) {
-                return;
+    public void onConnectionChanged(boolean connected) {
+        updateView(() -> {
+            if (this.connected && !connected) {
+                chatArea.setText("");
+                eventsArea.setText("");
+                connectionStatus.setText("Disconnected; choose a name to reconnect");
             }
-            JTextArea target = message.matches("^.+#\\d+: .*") ? chatArea : eventsArea;
+            this.connected = connected;
+            screenLayout.show(screens, connected ? "game" : "connection");
+            connectButton.setEnabled(!connected);
+            updateControls();
+        });
+    }
+
+    /** Append a received message to its chat or events panel.
+     * @param message display text
+     * @param chat true for player chat
+     */
+    @Override
+    public void onMessage(String message, boolean chat) {
+        updateView(() -> {
+            JTextArea target = chat ? chatArea : eventsArea;
             target.append(message + System.lineSeparator());
             target.setCaretPosition(target.getDocument().getLength());
         });
     }
 
-    /** Replace widgets only from ordinary client values on the EDT. */
-    private void render(ClientSnapshot snapshot) {
-        if (!SwingUtilities.isEventDispatchThread()) {
-            throw new IllegalStateException("Swing update off EDT");
-        }
-        if (shown != null && shown.connected() && !snapshot.connected()) {
-            chatArea.setText("");
-            eventsArea.setText("");
-        }
-        if (shown == null || !shown.phase().equals(snapshot.phase())) {
-            eventsArea.append("Phase: " + snapshot.phase() + System.lineSeparator());
-        }
-        if (shown == null || shown.currentTurnId() != snapshot.currentTurnId()) {
-            eventsArea.append("Current turn: " + snapshot.currentTurnId() + System.lineSeparator());
-        }
-        shown = snapshot;
-        snapshotAtNanos = System.nanoTime();
-        screenLayout.show(screens, snapshot.connected() ? "game" : "connection");
-        connectButton.setEnabled(!snapshot.connected());
-        if (!snapshot.connected()) {
-            connectionStatus.setText("Disconnected; choose a name to reconnect");
-        }
-
-        phaseLabel.setText("Phase: " + snapshot.phase());
-        roundLabel.setText("Round: " + snapshot.round());
-        readyLabel.setText("Ready: " + snapshot.readyCount());
-        String current = "none";
-        for (ClientSnapshot.Player player : snapshot.players()) {
-            if (player.myTurn()) {
-                current = player.name();
+    /** Update the roster and read the local player's control flags.
+     * @param clientId local player ID
+     * @param players copied public player rows
+     */
+    @Override
+    public void onPlayersChanged(long clientId, List<Player> players) {
+        updateView(() -> {
+            users.clear();
+            ready = false;
+            myTurn = false;
+            String current = "none";
+            long readyCount = 0;
+            for (Player player : players) {
+                users.addElement(player.name()
+                        + (player.myTurn() ? " [current turn]" : "")
+                        + (player.ready() ? " [ready]" : "")
+                        + (player.acted() ? " [acted]" : "")
+                        + "  points " + player.points()
+                        + "  cards " + player.cardCount());
+                if (player.ready()) {
+                    readyCount++;
+                }
+                if (player.myTurn()) {
+                    current = player.name();
+                }
+                if (player.id() == clientId) {
+                    ready = player.ready();
+                    myTurn = player.myTurn();
+                }
             }
-        }
-        turnLabel.setText("Current turn: " + current);
-        updateTimerLabel();
-
-        users.clear();
-        boolean ownReady = false;
-        for (ClientSnapshot.Player player : snapshot.players()) {
-            users.addElement(player.name()
-                    + (player.myTurn() ? " [current turn]" : "")
-                    + (player.ready() ? " [ready]" : "")
-                    + (player.acted() ? " [acted]" : "")
-                    + "  points " + player.points()
-                    + "  cards " + player.cardCount());
-            if (player.id() == snapshot.clientId()) {
-                ownReady = player.ready();
-            }
-        }
-        readyButton.setEnabled(snapshot.connected()
-                && ("INACTIVE".equals(snapshot.phase()) || "READY".equals(snapshot.phase()))
-                && !ownReady);
-        resetButton.setEnabled(snapshot.connected() && ownReady);
-        handBox.setEnabled(snapshot.canPlay());
-        if (!lastHand.equals(snapshot.hand())) {
-            lastHand = snapshot.hand();
-            handBox.removeAllItems();
-            for (int id : snapshot.hand()) {
-                Card definition = snapshot.catalog().stream()
-                        .filter(card -> card.getId() == id).findFirst().orElse(null);
-                handBox.addItem(new CardChoice(id,
-                        definition == null ? 0 : definition.getModifier()));
-            }
-        }
-        renderGrid(snapshot);
+            readyLabel.setText("Ready: " + readyCount);
+            turnLabel.setText("Current turn: " + current);
+            updateControls();
+        });
     }
 
-    /** Render only the accepted board and current play eligibility.
-     * @param snapshot current immutable view state
+    /** Refresh game labels when the accepted phase, round, or turn changes.
+     * @param phase accepted phase
+     * @param round current round
+     * @param currentTurnId ID of the current player, or the default ID
      */
-    private void renderGrid(ClientSnapshot snapshot) {
-        gridPanel.showGrid(snapshot.grid(), snapshot.canPlay());
+    @Override
+    public void onGameChanged(String phase, int round, long currentTurnId) {
+        updateView(() -> {
+            if (!this.phase.equals(phase)) {
+                eventsArea.append("Phase: " + phase + System.lineSeparator());
+            }
+            if (turnId != currentTurnId) {
+                eventsArea.append("Current turn: " + currentTurnId + System.lineSeparator());
+            }
+            this.phase = phase;
+            turnId = currentTurnId;
+            phaseLabel.setText("Phase: " + phase);
+            roundLabel.setText("Round: " + round);
+            updateControls();
+        });
+    }
+
+    /** Display a board update on the EDT.
+     * @param values copied board rows sent by Client
+     */
+    @Override
+    public void onBoardChanged(List<List<Integer>> values) {
+        updateView(() -> renderGrid(values));
+    }
+
+    /** Show the held cards and keep the selected card if it still exists.
+     * @param cards copied definitions for this player's private hand
+     */
+    @Override
+    public void onHandChanged(List<Card> cards) {
+        updateView(() -> {
+            CardChoice selected = (CardChoice) handBox.getSelectedItem();
+            handBox.removeAllItems();
+            for (Card card : cards) {
+                handBox.addItem(new CardChoice(card.getId(), card.getModifier()));
+            }
+            if (selected != null) {
+                handBox.setSelectedItem(selected);
+            }
+            updateControls();
+        });
+    }
+
+    /** Start or clear the local countdown displayed by the Swing timer.
+     * @param remainingMillis approximate time supplied by Client
+     */
+    @Override
+    public void onTimerChanged(int remainingMillis) {
+        updateView(() -> {
+            timerDeadlineNanos = remainingMillis == 0 ? 0
+                    : System.nanoTime() + remainingMillis * 1_000_000L;
+            updateTimerLabel();
+        });
+    }
+
+    /** Enable local controls from the latest event values. The server validates requests. */
+    private void updateControls() {
+        readyButton.setEnabled(connected && !ready
+                && ("INACTIVE".equals(phase) || "READY".equals(phase)));
+        resetButton.setEnabled(connected && ready);
+        handBox.setEnabled(canPlay());
+        gridPanel.setEnabled(canPlay());
+    }
+
+    /** Check whether the current view allows sending a card action.
+     * @return true for this player's active turn with a held card
+     */
+    private boolean canPlay() {
+        return connected && "IN_PROGRESS".equals(phase) && myTurn && handBox.getItemCount() > 0;
+    }
+
+    /** Render the accepted board with the current play eligibility.
+     * @param values immutable board rows
+     */
+    private void renderGrid(List<List<Integer>> values) {
+        gridPanel.showGrid(values, canPlay());
     }
 
     /** Send a selected card and clicked board coordinate.
@@ -371,7 +436,7 @@ public final class ClientUI extends JPanel implements ClientListener {
      */
     private void playAt(int x, int y) {
         CardChoice selected = (CardChoice) handBox.getSelectedItem();
-        if (shown == null || !shown.canPlay() || selected == null) {
+        if (!canPlay() || selected == null) {
             return;
         }
         enqueue(() -> send(() -> client.playCard(selected.id(), x, y)));
@@ -380,12 +445,11 @@ public final class ClientUI extends JPanel implements ClientListener {
     /** Refresh only the local approximate countdown label.
      */
     private void updateTimerLabel() {
-        if (shown == null || shown.remainingMillis() <= 0) {
+        if (timerDeadlineNanos == 0) {
             timerLabel.setText("Time: --");
             return;
         }
-        long elapsed = (System.nanoTime() - snapshotAtNanos) / 1_000_000;
-        long left = Math.max(0, shown.remainingMillis() - elapsed);
+        long left = Math.max(0, (timerDeadlineNanos - System.nanoTime()) / 1_000_000);
         timerLabel.setText("Time: " + ((left + 999) / 1000) + "s approx.");
     }
 
