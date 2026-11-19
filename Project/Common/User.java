@@ -1,7 +1,10 @@
 package Project.Common;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
- * Public identity and session progress for one connected user.
+ * Identity, session progress, and the local hand for one connected user.
  * ServerThread holds this record; Server uses it for recipients and user lists.
  * Payloads may carry the record between Client and ServerThread.
  */
@@ -12,6 +15,44 @@ public class User implements java.io.Serializable {
     private volatile boolean submitted;
     private volatile boolean isMyTurn;
     private volatile int points;
+    // User lists cross the network. Sync the actual card IDs separately to their owner.
+    private transient List<Integer> hand = new ArrayList<>();
+
+    /** Read a safe copy for display or an owner-only sync.
+     * @return the local hand, or an empty list after receiving a roster record
+     */
+    public List<Integer> getHand() {
+        return hand == null ? List.of() : List.copyOf(hand);
+    }
+
+    /** Replace the hand with a mutable copy for later draws and plays.
+     * @param cards actual IDs on the server or owner, or count-only placeholders on observers
+     */
+    public void setHand(List<Integer> cards) {
+        hand = new ArrayList<>(cards);
+    }
+
+    /** Add one drawn card to this player on the server.
+     * @param cardId the drawn card ID
+     */
+    public void addCard(int cardId) {
+        hand.add(cardId);
+    }
+
+    /** Check whether this player can spend the requested card on the server.
+     * @param cardId the requested card ID
+     * @return true when the hand contains the card
+     */
+    public boolean hasCard(int cardId) {
+        return hand.contains(cardId);
+    }
+
+    /** Spend one copy of a held card by ID on the server.
+     * @param cardId the validated card ID
+     */
+    public void removeCardById(int cardId) {
+        hand.remove(Integer.valueOf(cardId));
+    }
 
     public User(long clientId, String clientName) {
         this.clientId = clientId;

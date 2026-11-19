@@ -10,6 +10,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.Scanner;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -48,9 +49,6 @@ public enum Client {
 
     private Map<Integer, Card> cardCatalog = new HashMap<>();
 
-    private List<Integer> hand = new ArrayList<>();
-
-    private Map<Long, Integer> publicHandCounts = new HashMap<>();
 
     private final ConcurrentHashMap<Long, User> knownUsers = new ConcurrentHashMap<>();
 
@@ -201,7 +199,7 @@ public enum Client {
      */
     public synchronized ClientSnapshot snapshot() {
         return new ClientSnapshot(isConnected(), clientId, phase, round, currentTurnId,
-                remainingMillis(), playerRows(), boardRows(), new ArrayList<>(cardCatalog.values()), hand);
+                remainingMillis(), playerRows(), boardRows(), new ArrayList<>(cardCatalog.values()), localHand());
     }
 
     /** Copy the public roster so later User changes cannot alter a queued update.
@@ -212,7 +210,7 @@ public enum Client {
                 .sorted(Comparator.comparingLong(User::getClientId))
                 .map(user -> new Player(user.getClientId(), user.getDisplayName(),
                         user.isReady(), user.isSubmitted(), user.isMyTurn(), user.getPoints(),
-                        publicHandCounts.getOrDefault(user.getClientId(), 0)))
+                        user.getHand().size()))
                 .toList();
     }
 
@@ -238,7 +236,7 @@ public enum Client {
      * @return held cards with known definitions
      */
     private List<Card> cardsInHand() {
-        return hand.stream().map(cardCatalog::get).filter(Objects::nonNull).toList();
+        return localHand().stream().map(cardCatalog::get).filter(Objects::nonNull).toList();
     }
 
     /** Convert the local deadline to a duration for display.
@@ -364,7 +362,8 @@ public enum Client {
                         user.getDisplayName() + (user.isReady() ? " [ready]" : " [not ready]")
                                 + (user.isMyTurn() ? " [current turn]" : "")
                                 + (user.isSubmitted() ? " [submitted]" : " [not submitted]")
-                                + " points: " + user.getPoints() + "\n"));
+                                + " points: " + user.getPoints()
+                                + " cards: " + user.getHand().size() + "\n"));
                 LoggerUtil.INSTANCE.info(builder.toString());
                 return true;
             case REVERSE:
@@ -641,13 +640,16 @@ public enum Client {
 
     /**
      * Called by processPayload() for SERVER_SYNC.
-     * Adds the server's existing-user snapshot to the local map; later join and
-     * leave events keep that map current.
+     * Refresh the public user records while retaining hands added by card messages.
      *
      * @param userList the user records received in the snapshot
      */
     private void processServerSync(UserListPayload userList) {
         for (User user : userList.getUsers()) {
+            User previous = knownUsers.get(user.getClientId());
+            if (previous != null) {
+                user.setHand(previous.getHand());
+            }
             knownUsers.put(user.getClientId(), user);
         }
         emitPlayers();
@@ -689,7 +691,6 @@ public enum Client {
     private void processServerLeave(Payload payload) {
         User user = knownUsers.remove(payload.getClientId());
         if (user != null) {
-            publicHandCounts.remove(user.getClientId());
             LoggerUtil.INSTANCE.info(TextFX.colorize(user.getDisplayName() + " left", TextFX.Color.YELLOW));
             emitPlayers();
         }
@@ -758,8 +759,6 @@ public enum Client {
             knownUsers.clear();
             grid = null;
             cardCatalog.clear();
-            hand.clear();
-            publicHandCounts.clear();
             phase = "INACTIVE";
             round = 0;
             currentTurnId = Constants.DEFAULT_CLIENT_ID;
@@ -809,12 +808,23 @@ public enum Client {
         sendToServer(payload);
     }
 
-    /** Display only card IDs received privately on this connection. */
+    /** Read the owner-only IDs stored on this client’s User.
+     * @return actual local card IDs, or an empty hand before registration
+     */
+    private List<Integer> localHand() {
+        User user = knownUsers.get(clientId);
+        return user == null ? List.of() : user.getHand();
+    }
+
+    /** Display the local player's private hand as one log message. */
     private synchronized void showHand() {
-        LoggerUtil.INSTANCE.info("Your hand: " + hand);
+        List<Integer> hand = localHand();
+        StringBuilder message = new StringBuilder("Your hand: ");
+        message.append(hand);
         for (int id : hand) {
-            LoggerUtil.INSTANCE.info(String.valueOf(cardCatalog.get(id)));
+            message.append(System.lineSeparator()).append(cardCatalog.get(id));
         }
+        LoggerUtil.INSTANCE.info(message.toString());
     }
 
     /** Show the latest server-confirmed grid to the terminal user. */
@@ -860,15 +870,11 @@ public enum Client {
         }
     }
 
-    /** Replace public card definitions; an empty catalog clears counts.
+    /** Replace the public card definitions used to display held card IDs.
      * @param payload catalog sent to all clients
      */
     private void processCardCatalog(CardCatalogPayload payload) {
         cardCatalog.clear();
-        if (payload.getCards().isEmpty()) {
-            publicHandCounts.clear();
-            emitPlayers();
-        }
         for (Card card : payload.getCards()) {
             cardCatalog.put(card.getId(), card);
         }
@@ -879,16 +885,24 @@ public enum Client {
      * @param payload owner-only card IDs
      */
     private void processCardHand(CardHandPayload payload) {
-        hand = new ArrayList<>(payload.getCardIds());
-        LoggerUtil.INSTANCE.info("Your hand: " + hand);
-        emitHand();
+        User owner = knownUsers.get(clientId);
+        if (owner != null) {
+            owner.setHand(payload.getCardIds());
+            LoggerUtil.INSTANCE.info("Your hand: " + owner.getHand());
+            emitHand();
+            emitPlayers();
+        }
     }
 
-    /** Update one public hand size without receiving its card IDs.
+    /** Store one placeholder per card on another player for the public roster.
      * @param payload participant ID and card count
      */
     private void processCardCount(IntPayload payload) {
-        publicHandCounts.put(payload.getClientId(), payload.getValue());
+        User player = knownUsers.get(payload.getClientId());
+        if (player != null && player.getClientId() != clientId) {
+            // Real card IDs are positive. Zero stands for an unknown card.
+            player.setHand(Collections.nCopies(payload.getValue(), 0));
+        }
         LoggerUtil.INSTANCE.info("Player " + payload.getClientId()
                 + " has " + payload.getValue() + " cards");
         emitPlayers();
