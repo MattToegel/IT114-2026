@@ -33,8 +33,6 @@ final class GameServer {
 
     private final Map<Long, User> players = new LinkedHashMap<>();
 
-    /** Private card IDs by participant; hands are never placed in shared User records. */
-    private final Map<Long, List<Integer>> hands = new LinkedHashMap<>();
 
     private Phase phase = Phase.INACTIVE;
 
@@ -108,7 +106,6 @@ final class GameServer {
         }
         sender.setReady(true);
         players.put(sender.getClientId(), sender);
-        hands.put(sender.getClientId(), new ArrayList<>());
         if (phase == Phase.INACTIVE) {
             phase = Phase.READY;
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, "Ready check started; type /ready within " + ((READY_MS + 999) / 1000) + " seconds"));
@@ -125,14 +122,13 @@ final class GameServer {
      * @param y target row
      */
     void handleCardAction(User sender, int cardId, int x, int y) {
-        User player = players.get(sender.getClientId());
         try {
             checkSessionInProgress();
             checkIsParticipant(sender);
             checkNotSubmitted(sender);
             checkTakeTurn(sender);
             if (grid == null || !grid.contains(x, y) || cardId < 1
-                    || deck == null || !hands.get(player.getClientId()).contains(cardId) || deck.find(cardId) == null) {
+                    || deck == null || !sender.hasCard(cardId) || deck.find(cardId) == null) {
                 sendMessageTo(sender.getClientId(), "Use /card <cardId> <x> <y> with a card in your hand and a grid cell");
                 return;
             }
@@ -142,15 +138,15 @@ final class GameServer {
                 sendGridCell(position[0], position[1]);
             }
             int gained = grid.countOdd(affected);
-            player.setPoints(player.getPoints() + gained);
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(sender.getClientId(), player.getPoints()));
-            hands.get(player.getClientId()).remove(Integer.valueOf(cardId));
-            Server.INSTANCE.sendTo(sender.getClientId(), recipient -> recipient.sendCardHand(hands.get(player.getClientId())));
-            Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCount(sender.getClientId(), hands.get(player.getClientId()).size()));
+            sender.setPoints(sender.getPoints() + gained);
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(sender.getClientId(), sender.getPoints()));
+            sender.removeCardById(cardId);
+            Server.INSTANCE.sendTo(sender.getClientId(), recipient -> recipient.sendCardHand(sender.getHand()));
+            Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCount(sender.getClientId(), sender.getHand().size()));
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID,
                     sender.getDisplayName() + " played card " + cardId + " at (" + x + ", " + y
                     + ") and gained " + gained + " points"));
-            player.setSubmitted(true);
+            sender.setSubmitted(true);
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(sender.getClientId(), true));
             onTurnEnd();
         } catch (IT114CustomException exception) {
@@ -225,7 +221,7 @@ final class GameServer {
         for (User player : players.values()) {
             player.setPoints(0);
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(player.getClientId(), player.getPoints()));
-            hands.get(player.getClientId()).clear();
+            player.setHand(List.of());
         }
         try {
             deck = new Deck(Path.of("Project/Server/cards.txt"));
@@ -250,7 +246,7 @@ final class GameServer {
         if (departed == null) {
             return;
         }
-        hands.remove(client.getClientId());
+        client.setHand(List.of());
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCount(client.getClientId(), 0));
         client.setReady(false);
         client.setMyTurn(false);
@@ -300,9 +296,9 @@ final class GameServer {
             for (Map.Entry<Long, User> entry : players.entrySet()) {
                 long id = entry.getKey();
                 User player = entry.getValue();
-                Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendCardCount(id, hands.get(player.getClientId()).size()));
+                Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendCardCount(id, player.getHand().size()));
                 if (id == recipientId) {
-                    Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendCardHand(hands.get(player.getClientId())));
+                    Server.INSTANCE.sendTo(recipientId, recipient -> recipient.sendCardHand(player.getHand()));
                 }
             }
         }
@@ -337,11 +333,11 @@ final class GameServer {
             return;
         }
         User current = players.get(currentTurnPlayerId);
-        while (hands.get(current.getClientId()).size() < HAND_SIZE) {
-            hands.get(current.getClientId()).add(deck.draw());
+        while (current.getHand().size() < HAND_SIZE) {
+            current.addCard(deck.draw());
         }
-        Server.INSTANCE.sendTo(currentTurnPlayerId, recipient -> recipient.sendCardHand(hands.get(current.getClientId())));
-        Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCount(currentTurnPlayerId, hands.get(current.getClientId()).size()));
+        Server.INSTANCE.sendTo(currentTurnPlayerId, recipient -> recipient.sendCardHand(current.getHand()));
+        Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCount(currentTurnPlayerId, current.getHand().size()));
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendCurrentTurn(currentTurnPlayerId));
         Server.INSTANCE.sendGameAction(recipient -> recipient.sendMessage(Constants.DEFAULT_CLIENT_ID, players.get(currentTurnPlayerId).getDisplayName()
                 + " has " + ((TURN_MS + 999) / 1000) + " seconds to /card <cardId> <x> <y>"));
@@ -422,15 +418,14 @@ final class GameServer {
             player.setSubmitted(false);
             player.setPoints(0);
             long id = player.getClientId();
-            hands.get(player.getClientId()).clear();
-            Server.INSTANCE.sendTo(id, recipient -> recipient.sendCardHand(hands.get(player.getClientId())));
+            player.setHand(List.of());
+            Server.INSTANCE.sendTo(id, recipient -> recipient.sendCardHand(player.getHand()));
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendCardCount(id, 0));
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendReadyStatus(id, false));
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendTurnStatus(id, false));
             Server.INSTANCE.sendGameAction(recipient -> recipient.sendPoints(id, 0));
         }
         players.clear();
-        hands.clear();
         roundNumber = 0;
         grid = null;
         gridSeed = 0;
